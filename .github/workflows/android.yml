@@ -7,18 +7,64 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout Android project
+        uses: actions/checkout@v6
+
+      - name: Checkout ProtoHax source
+        uses: actions/checkout@v6
+        with:
+          repository: Alextheplayer919/ProtoHax
+          ref: 962b96226b09f80ae471d9c6958a0b3002cb3ab1
+          path: ProtoHax
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: '21'
           distribution: 'temurin'
           cache: gradle
 
-      - name: Grant execute permission for Gradle
+      - name: Add OAuth diagnostic
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path(
+              "ProtoHax/src/main/java/dev/sora/relay/session/listener/xbox/XboxDeviceInfo.kt"
+          )
+
+          lines = p.read_text().splitlines()
+
+          for i, line in enumerate(lines):
+              if 'throw RuntimeException("error occur whilst refreshing token: " + body.get("error").asString)' in line:
+                  indent = line[:len(line) - len(line.lstrip())]
+
+                  lines[i:i+1] = [
+                      f'{indent}val description = body.get("error_description")?.asString ?: "no description"',
+                      f'{indent}throw RuntimeException("OAuth error: " + body.get("error").asString + "; description: " + description)'
+                  ]
+                  break
+          else:
+              raise SystemExit("OAuth error line not found")
+
+          p.write_text("\n".join(lines) + "\n")
+          PY
+
+      - name: Build ProtoHax JAR
+        working-directory: ProtoHax
+        run: |
+          chmod +x gradlew
+          ./gradlew shadowJar --stacktrace
+
+      - name: Copy ProtoHax JAR
+        run: |
+          mkdir -p app/libs
+          cp ProtoHax/build/libs/ProtoHax-1.4.0.jar app/libs/ProtoHax-1.4.0.jar
+          ls -lh app/libs/ProtoHax-1.4.0.jar
+
+      - name: Grant Gradle permission
         run: chmod +x gradlew
 
       - name: Build release APK
