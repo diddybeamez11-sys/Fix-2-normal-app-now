@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v7
 
       # ---------------------------------------------------------
-      # Checkout the newer ProtoHax source
+      # Checkout ProtoHax source
       # ---------------------------------------------------------
       - name: Checkout ProtoHax source
         uses: actions/checkout@v7
@@ -31,7 +31,6 @@ jobs:
 
       # ---------------------------------------------------------
       # Java 21
-      # ProtoHax 1.4.0 is built for Java 21
       # ---------------------------------------------------------
       - name: Set up JDK 21
         uses: actions/setup-java@v6
@@ -49,10 +48,20 @@ jobs:
           javac -version
 
       # ---------------------------------------------------------
-      # Add better Microsoft OAuth diagnostics
+      # Fix ProtoHax Microsoft OAuth
+      #
+      # First login:
+      #   authorization code -> grant_type=authorization_code
+      #
+      # Existing account:
+      #   refresh token -> grant_type=refresh_token
+      #
+      # This removes the old token-format guessing logic.
       # ---------------------------------------------------------
-      - name: Add OAuth diagnostic
+      - name: Patch ProtoHax OAuth
         run: |
+          set -e
+
           python3 - <<'PY'
           from pathlib import Path
 
@@ -60,26 +69,242 @@ jobs:
               "ProtoHax/src/main/java/dev/sora/relay/session/listener/xbox/XboxDeviceInfo.kt"
           )
 
-          text = p.read_text()
+          if not p.exists():
+              raise SystemExit(f"File not found: {p}")
 
-          old = '''throw RuntimeException("error occur whilst refreshing token: " + body.get("error").asString)'''
+          new_source = r'''package dev.sora.relay.session.listener.xbox
 
-          new = '''val description =
-                                  body.get("error_description")?.asString ?: "no description"
-                              throw RuntimeException(
-                                  "OAuth error: " +
-                                      body.get("error").asString +
-                                      "; description: " +
-                                      description
-                              )'''
+          import com.google.gson.JsonParser
+          import dev.sora.relay.utils.HttpUtils
+          import okhttp3.FormBody
+          import okhttp3.Request
 
-          if old in text:
-              text = text.replace(old, new, 1)
-          elif "OAuth error:" not in text:
-              raise SystemExit("OAuth error line not found")
 
-          p.write_text(text)
+          data class XboxDeviceInfo(
+              val appId: String,
+              val deviceType: String,
+              val allowDirectTitleTokenFetch: Boolean = false,
+              val xalRedirect: String = ""
+          ) {
+
+              /**
+               * Exchange the Microsoft authorization code obtained during
+               * the first login for an access token and refresh token.
+               */
+              fun exchangeAuthorizationCode(code: String): Pair<String, String> {
+                  val form = FormBody.Builder()
+                      .add("client_id", appId)
+                      .add(
+                          "redirect_uri",
+                          "https://login.live.com/oauth20_desktop.srf"
+                      )
+                      .add("grant_type", "authorization_code")
+                      .add("code", code)
+                      .build()
+
+                  return executeTokenRequest(
+                      form,
+                      "exchanging authorization code"
+                  )
+              }
+
+              /**
+               * Refresh an existing Microsoft access token.
+               */
+              fun refreshAccessToken(refreshToken: String): Pair<String, String> {
+                  val form = FormBody.Builder()
+                      .add("client_id", appId)
+                      .add(
+                          "redirect_uri",
+                          "https://login.live.com/oauth20_desktop.srf"
+                      )
+                      .add(
+                          "scope",
+                          "service::user.auth.xboxlive.com::MBI_SSL"
+                      )
+                      .add("grant_type", "refresh_token")
+                      .add("refresh_token", refreshToken)
+                      .build()
+
+                  return executeTokenRequest(
+                      form,
+                      "refreshing access token"
+                  )
+              }
+
+              private fun executeTokenRequest(
+                  form: FormBody,
+                  operation: String
+              ): Pair<String, String> {
+                  val request = Request.Builder()
+                      .url("https://login.live.com/oauth20_token.srf")
+                      .header(
+                          "Content-Type",
+                          "application/x-www-form-urlencoded"
+                      )
+                      .post(form)
+                      .build()
+
+                  val response = HttpUtils.client
+                      .newCall(request)
+                      .execute()
+
+                  val responseBody = response.body?.string()
+                      ?: throw RuntimeException(
+                          "OAuth error while $operation: empty response"
+                      )
+
+                  val body = JsonParser
+                      .parseString(responseBody)
+                      .asJsonObject
+
+                  if (!response.isSuccessful ||
+                      !body.has("access_token") ||
+                      !body.has("refresh_token")
+                  ) {
+                      val error =
+                          body.get("error")?.asString ?: "unknown_error"
+
+                      val description =
+                          body.get("error_description")?.asString
+                              ?: "no description"
+
+                      throw RuntimeException(
+                          "OAuth error while $operation: " +
+                              "$error; description: $description"
+                      )
+                  }
+
+                  return body.get("access_token").asString to
+                      body.get("refresh_token").asString
+              }
+
+              companion object {
+
+                  val DEVICE_ANDROID = XboxDeviceInfo(
+                      "0000000048183522",
+                      "Android",
+                      false,
+                      xalRedirect =
+                          "ms-xal-0000000048183522://auth"
+                  )
+
+                  val DEVICE_IOS = XboxDeviceInfo(
+                      "000000004c17c01a",
+                      "iOS",
+                      false,
+                      xalRedirect =
+                          "ms-xal-000000004c17c01a://auth"
+                  )
+
+                  val DEVICE_NINTENDO = XboxDeviceInfo(
+                      "00000000441cc96b",
+                      "Nintendo",
+                      true
+                  )
+
+                  val devices = arrayOf(
+                      DEVICE_ANDROID,
+                      DEVICE_IOS,
+                      DEVICE_NINTENDO
+                  ).associateBy { it.deviceType }
+              }
+          }
+          '''
+
+          p.write_text(new_source.strip() + "\n")
+
+          print("Patched:")
+          print(p)
           PY
+
+          echo
+          echo "========================================"
+          echo "OAuth source after patch"
+          echo "========================================"
+
+          grep -n \
+            -E \
+            'exchangeAuthorizationCode|refreshAccessToken|grant_type|refresh_token' \
+            ProtoHax/src/main/java/dev/sora/relay/session/listener/xbox/XboxDeviceInfo.kt
+
+      # ---------------------------------------------------------
+      # Patch Android source to use the explicit OAuth methods
+      # ---------------------------------------------------------
+      - name: Patch Android OAuth callers
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          login = Path(
+              "app/src/main/java/dev/sora/protohax/ui/activities/MicrosoftLoginActivity.kt"
+          )
+
+          account = Path(
+              "app/src/main/java/dev/sora/protohax/relay/AccountManager.kt"
+          )
+
+          if not login.exists():
+              raise SystemExit(f"Missing Android login file: {login}")
+
+          if not account.exists():
+              raise SystemExit(f"Missing Android account file: {account}")
+
+          # -----------------------------------------------------
+          # MicrosoftLoginActivity.kt
+          # -----------------------------------------------------
+
+          text = login.read_text()
+
+          old = "activity.device.refreshToken(authCode)"
+
+          new = "activity.device.exchangeAuthorizationCode(authCode)"
+
+          if old not in text:
+              raise SystemExit(
+                  "Could not find old authorization-code call in "
+                  "MicrosoftLoginActivity.kt"
+              )
+
+          text = text.replace(old, new, 1)
+
+          login.write_text(text)
+
+          # -----------------------------------------------------
+          # AccountManager.kt
+          # -----------------------------------------------------
+
+          text = account.read_text()
+
+          old = "platform.refreshToken(refreshToken)"
+
+          new = "platform.refreshAccessToken(refreshToken)"
+
+          if old not in text:
+              raise SystemExit(
+                  "Could not find old refresh-token call in "
+                  "AccountManager.kt"
+              )
+
+          text = text.replace(old, new, 1)
+
+          account.write_text(text)
+
+          print("Android OAuth callers patched successfully.")
+          PY
+
+          echo
+          echo "========================================"
+          echo "Checking Android OAuth calls"
+          echo "========================================"
+
+          grep -n \
+            -E \
+            'exchangeAuthorizationCode|refreshAccessToken' \
+            app/src/main/java/dev/sora/protohax/ui/activities/MicrosoftLoginActivity.kt \
+            app/src/main/java/dev/sora/protohax/relay/AccountManager.kt
 
       # ---------------------------------------------------------
       # Build ProtoHax
@@ -95,15 +320,7 @@ jobs:
             --no-daemon
 
       # ---------------------------------------------------------
-      # Copy and clean the ProtoHax JAR
-      #
-      # Android already supplies:
-      #   kotlin-stdlib
-      #   org.jetbrains.annotations
-      #   org.intellij.lang.annotations
-      #
-      # The shaded ProtoHax JAR must therefore not contain
-      # duplicate copies of those classes.
+      # Copy and clean ProtoHax JAR
       # ---------------------------------------------------------
       - name: Prepare ProtoHax JAR
         run: |
@@ -144,59 +361,36 @@ jobs:
 
           echo
           echo "========================================"
-          echo "Checking remaining duplicate classes"
-          echo "========================================"
-
-          echo
-          echo "Kotlin classes:"
-          unzip -l app/libs/ProtoHax-1.4.0.jar \
-            | grep -E '^[^ ]+[[:space:]]+kotlin/.*\.class$' \
-            | head -20 || true
-
-          echo
-          echo "JetBrains annotation classes:"
-          unzip -l app/libs/ProtoHax-1.4.0.jar \
-            | grep -E 'org/jetbrains/annotations/.*\.class' \
-            | head -20 || true
-
-          echo
-          echo "IntelliJ annotation classes:"
-          unzip -l app/libs/ProtoHax-1.4.0.jar \
-            | grep -E 'org/intellij/lang/annotations/.*\.class' \
-            | head -20 || true
-
-          echo
-          echo "========================================"
           echo "Hard verification"
           echo "========================================"
 
           if unzip -l app/libs/ProtoHax-1.4.0.jar \
             | grep -E 'kotlin/.*\.class'; then
-            echo "ERROR: Kotlin classes are still inside ProtoHax JAR."
+            echo "ERROR: Kotlin classes still inside ProtoHax JAR."
             exit 1
           fi
 
           if unzip -l app/libs/ProtoHax-1.4.0.jar \
             | grep -E 'org/jetbrains/annotations/.*\.class'; then
-            echo "ERROR: JetBrains annotation classes are still inside ProtoHax JAR."
+            echo "ERROR: JetBrains annotation classes still inside ProtoHax JAR."
             exit 1
           fi
 
           if unzip -l app/libs/ProtoHax-1.4.0.jar \
             | grep -E 'org/intellij/lang/annotations/.*\.class'; then
-            echo "ERROR: IntelliJ annotation classes are still inside ProtoHax JAR."
+            echo "ERROR: IntelliJ annotation classes still inside ProtoHax JAR."
             exit 1
           fi
 
           echo
-          echo "SUCCESS: Duplicate runtime/annotation classes removed."
+          echo "SUCCESS: Duplicate classes removed."
 
           echo
           echo "Final JAR:"
           ls -lh app/libs/ProtoHax-1.4.0.jar
 
       # ---------------------------------------------------------
-      # Verify important ProtoHax classes survived the cleanup
+      # Verify important ProtoHax classes
       # ---------------------------------------------------------
       - name: Verify ProtoHax JAR
         run: |
@@ -244,7 +438,7 @@ jobs:
             --no-daemon
 
       # ---------------------------------------------------------
-      # Verify APK exists
+      # Verify APK
       # ---------------------------------------------------------
       - name: Verify APK
         run: |
