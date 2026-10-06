@@ -1,0 +1,71 @@
+<resources>
+    <string name="mitm_connected">Verbunden mit MITM-Proxy</string>
+    <string name="mitm_connected_launch">App starten</string>
+    <string name="mitm_disconnected">Vom MITM-Proxy getrennt</string>
+    <string name="request_overlay">Wir benötigen Berechtigungen für Overlays, um GUIs anzuzeigen, mit denen Sie im Spiel interagieren können</string>
+    <string name="proxy_notification">%1$s bearbeitet Pakete für %2$s</string>
+
+    <string name="dashboard_more">Mehr</string>
+    <string name="dashboard_about">Über</string>
+    <string name="dashboard_no_account_selected">Melden Sie sich mit einem Microsoft-Konto an, um Xbox-authentifizierte Server zu verbinden</string>
+    <string name="dashboard_about_info">Lizensiert unter %1$s\nQuellcode auf %2$s ansehen\nUnser %3$s beitreten</string>
+    <string name="dashboard_select_application">Wähle eine Anwendung</string>
+    <string name="dashboard_select_application_placeholder">Zoek naar Anwendungen</string>
+    <string name="dashboard_selected_application">Ausgewählte Anwendung</string>
+    <string name="dashboard_no_application">Keine Anwendung ausgewählt</string>
+    <string name="dashboard_current_version">Aktuell: v%s</string>
+    <string name="dashboard_recommended_version">Empfohlen: v%s</string>
+    <string name="dashboard_fab_connect">Verbinden</string>
+    <string name="dashboard_fab_disconnect">Trennen</string>
+
+    <string name="config_rename">Umbenennen</string>
+    <string name="config_copy">Kopieren</string>
+    <string name="config_share">Teilen</string>
+    <string name="config_delete">Löschen</string>
+    <string name="config_create">Neue Konfig erstellen</string>
+    <string name="config_import">Konfig importieren</string>
+    <string name="config_deselect">Abwählen</string>
+    <string name="config_delete_dialog_message">Sind Sie sicher, dass Sie die Konfig %s löschen möchten?</string>
+    <string name="config_rename_dialog_message">Umbenennen</string>
+    <string name="config_copy_dialog_message">Kopieren</string>
+    <string name="config_loaded">Konfig %s geladen</string>
+    <string name="config_saved">Konfig %s gespeichert</string>
+
+    <string name="accounts_login">Anmelden</string>
+    <string name="accounts_login_as">Anmelden als %s</string>
+    <string name="account_select">Auswählen</string>
+    <string name="account_selected">(Ausgewählt)</string>
+    <string name="account_delete_dialog_message">Sind Sie sicher, dass Sie das Konto %s löschen möchten?</string>
+
+    <string name="setting_encryption">Offline Sessie Override</string>
+    <string name="setting_encryption_desc">Sta versleuteling toe voor offline modus</string>
+    <string name="setting_commands">Befehle</string>
+    <string name="setting_commands_desc">Erlaubt die Verwendung von Befehlen zur Steuerung von ProtoHax im Spiel</string>
+    <string name="setting_rak_reliability">RakNet Zuverlässigkeit</string>
+    <string name="setting_rak_reliability_desc">Deaktivieren Sie dies, um HoL-Blocking von RakNet zu deaktivieren, was zu Paketstörungen führen kann, aber die Latenz verbessert</string>
+    <string name="setting_restart_required">Neustart erforderlich, um die Änderungen anzuwenden</string>
+    <string name="setting_restart_required_action">Neustart</string>
+    <string name="setting_ip_auto">Automatisch</string>
+    <string name="setting_ip_enabled">Aktiviert</string>
+    <string name="setting_ip_disabled">Deaktiviert</string>
+    <string name="setting_ip_only">Nur IPv6</string>
+    <string name="setting_trust_click">Klicks vertrauen</string>
+    <string name="setting_trust_click_desc">Führe `adb shell settings put global block_untrusted_touches 0` aus, um Klicks über Überlagerung zu vertrauen</string>
+    <string name="setting_trust_click_disabled">Alle Klicks sind unter Android 12 vertrauenswürdig</string>
+    <string name="setting_logs">Logs</string>
+    <string name="setting_logs_desc">Toon Logs</string>
+
+    <string name="logcat_clear">Logs wissen</string>
+    <string name="logcat_share">Logs delen</string>
+
+    <string name="tab_dashboard">Dashboard</string>
+    <string name="tab_accounts">Accounts</string>
+    <string name="tab_configs">Configuraties</string>
+    <string name="tab_settings">Instellingen</string>
+    <string name="tab_btn_navigation_drawer">Navigatie Lade</string>
+
+    <string name="dialog_title">Fortfahren?</string>
+    <string name="dialog_confirm">Bestätigen</string>
+    <string name="dialog_cancel">Abbrechen</string>
+    <string name="dialog_loading">Beladung</string>
+</resources>
