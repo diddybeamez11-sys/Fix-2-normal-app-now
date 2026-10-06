@@ -85,7 +85,7 @@ class ModuleIndicatorElement : HudElement(HudManager.MODULE_INDICATOR_ELEMENT_ID
 
 		var y = 0f
 		val lineSpacing = (spacingValue * MyApplication.density)
-		val maxWidth = modules.maxOf { paint.measureText(i18nNormalization(it.displayName)) }
+		val maxWidth = modules.maxOf { paint.measureText(i18nNormalization(it.name)) }
 		modules.forEachIndexed { i, module ->
 			paint.color = colorModeValue.getColor(
 				if (colorReversedSortValue) modules.size - i else i,
@@ -95,8 +95,8 @@ class ModuleIndicatorElement : HudElement(HudManager.MODULE_INDICATOR_ELEMENT_ID
 				colorBlueValue
 			)
 			canvas.drawText(
-				i18nNormalization(module.displayName),
-				if (textRTLValue) maxWidth - paint.measureText(i18nNormalization(module.displayName)) else 0f,
+				i18nNormalization(module.name),
+				if (textRTLValue) maxWidth - paint.measureText(i18nNormalization(module.name)) else 0f,
 				-paint.fontMetrics.ascent + y,
 				paint
 			)
@@ -122,14 +122,14 @@ class ModuleIndicatorElement : HudElement(HudManager.MODULE_INDICATOR_ELEMENT_ID
 			override fun getModules(paint: TextPaint): List<CheatModule> {
 				return MinecraftRelay.moduleManager.modules
 					.filter { it.state }
-					.sortedBy { i18nNormalization(it.displayName) }
+					.sortedBy { i18nNormalization(it.name) }
 			}
 		},
 		NAME_DESCENDING("NameDescending") {
 			override fun getModules(paint: TextPaint): List<CheatModule> {
 				return MinecraftRelay.moduleManager.modules
 					.filter { it.state }
-					.sortedBy { i18nNormalization(it.displayName) }
+					.sortedBy { i18nNormalization(it.name) }
 					.reversed()
 			}
 		},
@@ -137,14 +137,14 @@ class ModuleIndicatorElement : HudElement(HudManager.MODULE_INDICATOR_ELEMENT_ID
 			override fun getModules(paint: TextPaint): List<CheatModule> {
 				return MinecraftRelay.moduleManager.modules
 					.filter { it.state }
-					.sortedBy { paint.measureText(i18nNormalization(it.displayName)) }
+					.sortedBy { paint.measureText(i18nNormalization(it.name)) }
 			}
 		},
 		LENGTH_DESCENDING("LengthDescending") {
 			override fun getModules(paint: TextPaint): List<CheatModule> {
 				return MinecraftRelay.moduleManager.modules
 					.filter { it.state }
-					.sortedBy { paint.measureText(i18nNormalization(it.displayName)) }
+					.sortedBy { paint.measureText(i18nNormalization(it.name)) }
 					.reversed()
 			}
 		};

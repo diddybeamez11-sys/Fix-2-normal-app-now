@@ -84,7 +84,7 @@ fun CheatCategoryTab(
 			Spacer(modifier = Modifier.height(10.dp))
 		}
 		items(modules.keys.filter { it.category == category }
-			.sortedBy { i18nNormalization(it.displayName) }) { module ->
+			.sortedBy { i18nNormalization(it.name) }) { module ->
 			val expand = expandModules.contains(module)
 			Card(
 				colors = CardDefaults.cardColors(containerColor = animateColorAsState(targetValue = if (expand) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.inversePrimary).value),
@@ -111,7 +111,7 @@ fun CheatCategoryTab(
 				) {
 					Box(modifier = Modifier.fillMaxWidth()) {
 						Text(
-							text = i18nNormalization(module.displayName),
+							text = i18nNormalization(module.name),
 							fontWeight = if (expand) FontWeight.Bold else null,
 							modifier = Modifier
 								.fillMaxWidth()
@@ -232,7 +232,7 @@ fun CheatValue(value: Value<*>, recomposeTrigger: () -> Unit) {
 				.height(30.dp)
 		) {
 			Text(
-				text = i18nNormalization(value.displayName),
+				text = i18nNormalization(value.name),
 				modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
 			)
 			Spacer(modifier = Modifier.weight(1f))
@@ -255,7 +255,7 @@ fun CheatValue(value: Value<*>, recomposeTrigger: () -> Unit) {
 			verticalAlignment = Alignment.CenterVertically
 		) {
 			Text(
-				text = i18nNormalization(value.displayName),
+				text = i18nNormalization(value.name),
 				modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
 			)
 			Spacer(modifier = Modifier.weight(1f))
@@ -299,7 +299,7 @@ fun CheatValue(value: Value<*>, recomposeTrigger: () -> Unit) {
 			verticalAlignment = Alignment.CenterVertically
 		) {
 			Text(
-				text = i18nNormalization(value.displayName),
+				text = i18nNormalization(value.name),
 				modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
 			)
 			Spacer(modifier = Modifier.weight(1f))
@@ -321,7 +321,7 @@ fun CheatValue(value: Value<*>, recomposeTrigger: () -> Unit) {
 		)
 	} else if (value is ListValue) {
 		Text(
-			text = i18nNormalization(value.displayName),
+			text = i18nNormalization(value.name),
 			modifier = Modifier
 				.padding(0.dp, 5.dp)
 				.basicMarquee(iterations = Int.MAX_VALUE)
@@ -357,7 +357,7 @@ fun CheatValue(value: Value<*>, recomposeTrigger: () -> Unit) {
 			}
 		}
 	} else if (value is StringValue) {
-		Text(text = i18nNormalization(value.displayName))
+		Text(text = i18nNormalization(value.name))
 		TextField(
 			value = value.value,
 			onValueChange = {
