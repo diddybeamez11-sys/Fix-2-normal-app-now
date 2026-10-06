@@ -5,14 +5,23 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
+      # ---------------------------------------------------------
+      # Checkout Android project
+      # ---------------------------------------------------------
       - name: Checkout Android project
         uses: actions/checkout@v7
 
+      # ---------------------------------------------------------
+      # Checkout the newer ProtoHax source
+      # ---------------------------------------------------------
       - name: Checkout ProtoHax source
         uses: actions/checkout@v7
         with:
@@ -20,6 +29,10 @@ jobs:
           ref: 962b96226b09f80ae471d9c6958a0b3002cb3ab1
           path: ProtoHax
 
+      # ---------------------------------------------------------
+      # Java 21
+      # ProtoHax 1.4.0 is built for Java 21
+      # ---------------------------------------------------------
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
@@ -27,11 +40,17 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      # ---------------------------------------------------------
+      # Verify Java
+      # ---------------------------------------------------------
       - name: Show Java version
         run: |
           java -version
           javac -version
 
+      # ---------------------------------------------------------
+      # Add better Microsoft OAuth diagnostics
+      # ---------------------------------------------------------
       - name: Add OAuth diagnostic
         run: |
           python3 - <<'PY'
@@ -62,27 +81,94 @@ jobs:
           p.write_text(text)
           PY
 
+      # ---------------------------------------------------------
+      # Build ProtoHax
+      # ---------------------------------------------------------
       - name: Build ProtoHax JAR
         working-directory: ProtoHax
         run: |
           chmod +x gradlew
-          ./gradlew shadowJar --stacktrace --no-daemon
 
+          ./gradlew \
+            shadowJar \
+            --stacktrace \
+            --no-daemon
+
+      # ---------------------------------------------------------
+      # Copy and clean the ProtoHax JAR
+      #
+      # Android already supplies:
+      #   kotlin-stdlib
+      #   org.jetbrains.annotations
+      #   org.intellij.lang.annotations
+      #
+      # The shaded ProtoHax JAR must therefore not contain
+      # duplicate copies of those classes.
+      # ---------------------------------------------------------
       - name: Prepare ProtoHax JAR
         run: |
+          set -e
+
           mkdir -p app/libs
 
           cp \
             ProtoHax/build/libs/ProtoHax-1.4.0.jar \
             app/libs/ProtoHax-1.4.0.jar
 
-          echo "Removing duplicated Kotlin runtime classes..."
+          echo "========================================"
+          echo "Original ProtoHax JAR"
+          echo "========================================"
+
+          ls -lh app/libs/ProtoHax-1.4.0.jar
+
+          echo
+          echo "Removing Kotlin runtime classes..."
 
           zip -d \
             app/libs/ProtoHax-1.4.0.jar \
             'kotlin/*' >/dev/null || true
 
-          echo "Checking for remaining Kotlin classes..."
+          echo
+          echo "Removing JetBrains annotation classes..."
+
+          zip -d \
+            app/libs/ProtoHax-1.4.0.jar \
+            'org/jetbrains/annotations/*' >/dev/null || true
+
+          echo
+          echo "Removing IntelliJ annotation classes..."
+
+          zip -d \
+            app/libs/ProtoHax-1.4.0.jar \
+            'org/intellij/lang/annotations/*' >/dev/null || true
+
+          echo
+          echo "========================================"
+          echo "Checking remaining duplicate classes"
+          echo "========================================"
+
+          echo
+          echo "Kotlin classes:"
+          unzip -l app/libs/ProtoHax-1.4.0.jar \
+            | grep -E '^[^ ]+[[:space:]]+kotlin/.*\.class$' \
+            | head -20 || true
+
+          echo
+          echo "JetBrains annotation classes:"
+          unzip -l app/libs/ProtoHax-1.4.0.jar \
+            | grep -E 'org/jetbrains/annotations/.*\.class' \
+            | head -20 || true
+
+          echo
+          echo "IntelliJ annotation classes:"
+          unzip -l app/libs/ProtoHax-1.4.0.jar \
+            | grep -E 'org/intellij/lang/annotations/.*\.class' \
+            | head -20 || true
+
+          echo
+          echo "========================================"
+          echo "Hard verification"
+          echo "========================================"
 
           if unzip -l app/libs/ProtoHax-1.4.0.jar \
             | grep -E 'kotlin/.*\.class'; then
@@ -90,38 +176,66 @@ jobs:
             exit 1
           fi
 
-          echo "ProtoHax JAR prepared successfully:"
-          ls -lh app/libs/ProtoHax-1.4.0.jar
-
-      - name: Check ProtoHax JAR
-        run: |
-          echo "Checking important ProtoHax classes..."
-
-          unzip -l app/libs/ProtoHax-1.4.0.jar \
-            | grep 'dev/sora/relay/cheat/module/CheatModule.class'
-
-          unzip -l app/libs/ProtoHax-1.4.0.jar \
-            | grep 'dev/sora/relay/session/listener/xbox/XboxDeviceInfo.class'
-
-          unzip -l app/libs/ProtoHax-1.4.0.jar \
-            | grep 'org/cloudburstmc/protocol/bedrock/codec/v844/Bedrock_v844.class'
-
-          echo "Checking that Kotlin runtime is absent..."
-
           if unzip -l app/libs/ProtoHax-1.4.0.jar \
-            | grep -E 'kotlin/.*\.class'; then
-            echo "ERROR: Kotlin runtime still exists in JAR."
+            | grep -E 'org/jetbrains/annotations/.*\.class'; then
+            echo "ERROR: JetBrains annotation classes are still inside ProtoHax JAR."
             exit 1
           fi
 
-          echo "JAR checks passed."
+          if unzip -l app/libs/ProtoHax-1.4.0.jar \
+            | grep -E 'org/intellij/lang/annotations/.*\.class'; then
+            echo "ERROR: IntelliJ annotation classes are still inside ProtoHax JAR."
+            exit 1
+          fi
 
+          echo
+          echo "SUCCESS: Duplicate runtime/annotation classes removed."
+
+          echo
+          echo "Final JAR:"
+          ls -lh app/libs/ProtoHax-1.4.0.jar
+
+      # ---------------------------------------------------------
+      # Verify important ProtoHax classes survived the cleanup
+      # ---------------------------------------------------------
+      - name: Verify ProtoHax JAR
+        run: |
+          set -e
+
+          echo "Checking CheatModule..."
+          unzip -l app/libs/ProtoHax-1.4.0.jar \
+            | grep 'dev/sora/relay/cheat/module/CheatModule.class'
+
+          echo "Checking XboxDeviceInfo..."
+          unzip -l app/libs/ProtoHax-1.4.0.jar \
+            | grep 'dev/sora/relay/session/listener/xbox/XboxDeviceInfo.class'
+
+          echo "Checking Bedrock protocol v844..."
+          unzip -l app/libs/ProtoHax-1.4.0.jar \
+            | grep 'org/cloudburstmc/protocol/bedrock/codec/v844/Bedrock_v844.class'
+
+          echo
+          echo "All important ProtoHax classes found."
+
+      # ---------------------------------------------------------
+      # Make Gradle executable
+      # ---------------------------------------------------------
       - name: Grant Gradle permission
-        run: chmod +x gradlew
+        run: |
+          chmod +x gradlew
 
+      # ---------------------------------------------------------
+      # Clean Android build
+      # ---------------------------------------------------------
       - name: Clean Android build
-        run: ./gradlew clean --no-daemon
+        run: |
+          ./gradlew \
+            clean \
+            --no-daemon
 
+      # ---------------------------------------------------------
+      # Build release APK
+      # ---------------------------------------------------------
       - name: Build release APK
         run: |
           ./gradlew \
@@ -129,9 +243,15 @@ jobs:
             --stacktrace \
             --no-daemon
 
+      # ---------------------------------------------------------
+      # Verify APK exists
+      # ---------------------------------------------------------
       - name: Verify APK
         run: |
-          echo "APK files:"
+          set -e
+
+          echo "Searching for APK..."
+
           find app/build/outputs/apk/release \
             -type f \
             -name "*.apk" \
@@ -139,8 +259,13 @@ jobs:
 
           test -f app/build/outputs/apk/release/app-release.apk
 
+          echo
+          echo "APK successfully built:"
           ls -lh app/build/outputs/apk/release/app-release.apk
 
+      # ---------------------------------------------------------
+      # Upload APK
+      # ---------------------------------------------------------
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
