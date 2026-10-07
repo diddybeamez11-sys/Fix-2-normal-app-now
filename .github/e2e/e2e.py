@@ -106,6 +106,26 @@ def area(f):
     return (f[2] - f[0]) * (f[3] - f[1])
 
 
+def find_button(label, attempts=6):
+    """find a button on the dashboard, dismissing an ANR dialog of another app (slow CI emulator) if one covers it"""
+    nodes = []
+    for _ in range(attempts):
+        nodes = ui_nodes()
+        texts = [t or d for t, d, c, b, k in nodes if (t or d)]
+        if any("isn't responding" in t for t in texts):
+            wait = find_node("Wait", nodes) or find_node("Close app", nodes)
+            log("a system dialog covers the app (%s) - dismissing it" % [t for t in texts if "responding" in t])
+            if wait:
+                tap(wait)
+            time.sleep(4)
+            continue
+        b = find_node(label, nodes)
+        if b:
+            return b, nodes
+        time.sleep(5)
+    return None, nodes
+
+
 def tap(b):
     x, y = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
     sh("input tap %d %d" % (x, y))
@@ -355,7 +375,7 @@ def relay_test():
     codec = logcat_lines(r"selected codec")
     check("relay log: Bedrock_v844 selected for a protocol-844 client",
           any("clientProtocol=844" in l and "protocol=844" in l and "mc=1.21.111" in l for l in codec), str([l[-90:] for l in codec][:2]))
-    check("no crash during the relay test", not logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG)))
+    check("no crash during the relay test", not logcat_lines(r"FATAL EXCEPTION|ANR in " + re.escape(PKG) + "|AndroidRuntime: Process: " + re.escape(PKG)))
 
 
 def main():
@@ -370,6 +390,7 @@ def main():
     uid_line = sh("id")
     rooted = "uid=0" in uid_line
     check("adb root available (to preselect the target app)", rooted, uid_line.strip())
+    sh("settings put global hide_error_dialogs 1")   # a slow CI emulator pops up ANR dialogs of the launcher
     sh("logcat -G 16M")
     adb("logcat", "-c")
 
@@ -403,11 +424,10 @@ def main():
     # ---- 3. launch the real UI and press Connect -------------------------------------------------------
     sh("am start -W -n %s/.ui.activities.MainActivity" % PKG)
     time.sleep(8)
-    nodes = ui_nodes()
-    texts = [t or d for t, d, c, b, k in nodes if (t or d)]
+    b, nodes = find_button("Connect")
+    texts = [t or d for t, d, c, b2, k in nodes if (t or d)]
     log("dashboard texts: %s" % texts[:40])
     screenshot("1-dashboard")
-    b = find_node("Connect", nodes)
     check("dashboard shows the Connect button", b is not None, "bounds=%s" % (b,))
     check("dashboard shows the preselected application (not 'No application selected')",
           not any("No application selected" in t for t in texts))
@@ -424,7 +444,7 @@ def main():
     relay = logcat_lines(r"relay started|start relay|announce")
     log("relay log: %s" % [h[-120:] for h in relay][:5])
     check("log: relay started", any("relay started" in h for h in relay))
-    check("no crash so far", not logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG)))
+    check("no crash so far", not logcat_lines(r"FATAL EXCEPTION|ANR in " + re.escape(PKG) + "|AndroidRuntime: Process: " + re.escape(PKG)))
     has_service, is_fg = service_state()
     check("AppService is running in the foreground", has_service and is_fg, "running=%s foreground=%s" % (has_service, is_fg))
     tun = vpn_up()
@@ -462,7 +482,7 @@ def main():
           "after=%s" % [(w["ready"], w["vis"], w["flags"][:60]) for w in menu_after])
     cat_hits = [t for t in menu_texts if t.lower() in ("combat", "movement", "visual", "misc", "world", "player", "fly", "killaura", "speed")]
     check("the menu lists modules / categories", len(cat_hits) > 0 or len(menu_texts) > 8, "matched=%s" % cat_hits[:8])
-    crash = logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG))
+    crash = logcat_lines(r"FATAL EXCEPTION|ANR in " + re.escape(PKG) + "|AndroidRuntime: Process: " + re.escape(PKG))
     check("no crash after opening the menu", not crash, str(crash[:2])[:200])
 
     # toggle one module from the open menu (EventModuleToggle -> the menu's stateMap listener)
@@ -477,7 +497,7 @@ def main():
     if toggled:
         screenshot("3b-module-toggled")
         check("toggling module '%s' does not crash" % toggled,
-              not logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG)))
+              not logcat_lines(r"FATAL EXCEPTION|ANR in " + re.escape(PKG) + "|AndroidRuntime: Process: " + re.escape(PKG)))
     else:
         log("no known module name found among the visible menu texts")
 
@@ -490,8 +510,7 @@ def main():
     # ---- 6. Disconnect, then Connect again (teardown / second session) --------------------------------------
     sh("am start -W -n %s/.ui.activities.MainActivity" % PKG)
     time.sleep(4)
-    nodes = ui_nodes()
-    b = find_node("Disconnect", nodes)
+    b, nodes = find_button("Disconnect")
     check("dashboard offers Disconnect while connected", b is not None, "bounds=%s" % (b,))
     if b is not None:
         tap(b)
@@ -501,8 +520,7 @@ def main():
         check("overlay windows are removed after Disconnect", len(left) == 0, "%d left" % len(left))
         check("VPN tunnel is gone after Disconnect", not vpn_up(), str(vpn_up())[:100])
         screenshot("5-after-disconnect")
-        nodes = ui_nodes()
-        b = find_node("Connect", nodes)
+        b, nodes = find_button("Connect")
         check("dashboard offers Connect again", b is not None)
         if b is not None:
             tap(b)
@@ -513,7 +531,7 @@ def main():
             check("second session: exactly one floating icon", len(small) == 1, "%d icon window(s)" % len(small))
             check("second session: VPN tunnel is up", bool(vpn_up()))
             screenshot("6-second-session")
-            check("no crash in the second session", not logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG)))
+            check("no crash in the second session", not logcat_lines(r"FATAL EXCEPTION|ANR in " + re.escape(PKG) + "|AndroidRuntime: Process: " + re.escape(PKG)))
             if vpn_up():
                 relay_test()
     finish()
