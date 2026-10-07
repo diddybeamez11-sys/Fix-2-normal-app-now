@@ -168,6 +168,70 @@ def service_state():
     return ("AppService" in s, "isForeground=true" in s)
 
 
+TARGET_UID = 1000
+
+
+def pick_target():
+    """the application whose traffic ProtoHax tunnels: an installed app with its OWN uid and the INTERNET permission
+    (a system uid would drag system_server / adbd traffic into the tunnel)"""
+    global TARGET, TARGET_UID
+    out = sh("pm list packages -U")
+    pk = {m.group(1): int(m.group(2)) for m in re.finditer(r"package:(\S+) uid:(\d+)", out)}
+    own = [(n, u) for n, u in sorted(pk.items(), key=lambda kv: kv[1]) if u >= 10000]
+    log("installed packages with their own uid (%d): %s" % (len(own), own[:50]))
+    prefer = ["com.android.calendar", "com.android.contacts", "com.android.dialer", "com.android.camera2",
+              "com.google.android.calendar", "com.google.android.contacts", "com.google.android.dialer",
+              "com.android.email", "com.android.chrome", "com.google.android.apps.messaging"]
+    for cand in prefer + [n for n, u in own]:
+        if cand in pk and pk[cand] >= 10000 and cand != PKG:
+            dump = sh("dumpsys package %s" % cand, timeout=120)
+            if "android.permission.INTERNET: granted=true" in dump:
+                TARGET, TARGET_UID = cand, pk[cand]
+                break
+    log("target application: %s uid=%d" % (TARGET, TARGET_UID))
+
+
+def relay_test():
+    """a RakNet/Bedrock client under the target app's uid talks to a stub backend on the CI host THROUGH the VPN,
+    the netstack and the Java relay: RequestNetworkSettings(844) -> relay (codec selection) -> backend -> NetworkSettings"""
+    server_bin = os.path.join(WS, "rak", "rakserver")
+    client_bin = os.path.join(WS, "rak", "rakclient")
+    if not (os.path.exists(server_bin) and os.path.exists(client_bin)):
+        log("relay test skipped: tools not built")
+        return
+    srv_path = os.path.join(OUT, "20-rak-backend-server.txt")
+    srv_log = open(srv_path, "w")
+    srv = subprocess.Popen([server_bin, "0.0.0.0:19132"], stdout=srv_log, stderr=subprocess.STDOUT)
+    time.sleep(2)
+    adb("push", client_bin, "/data/local/tmp/rakclient")
+    sh("chmod 755 /data/local/tmp/rakclient")
+    out = ""
+    for who in ("%d,%d,3003" % (TARGET_UID, TARGET_UID), str(TARGET_UID)):
+        out = sh("su %s /data/local/tmp/rakclient 10.0.2.2:19132" % who, timeout=150)
+        log("client (su %s):\n%s" % (who, out.strip()))
+        if "CLIENT" in out:
+            break
+    time.sleep(3)
+    srv.terminate()
+    srv_log.close()
+    server_out = open(srv_path).read()
+    log("backend log:\n%s" % server_out.strip())
+    open(os.path.join(OUT, "21-rak-client-output.txt"), "w").write(out)
+
+    check("relay test: the client completed the RakNet handshake through VPN -> netstack -> relay", "CLIENT CONNECTED" in out,
+          out.strip()[:140].replace("\n", " | "))
+    sess = logcat_lines(r"SessionCreation")
+    check("relay log: SessionCreation (the Java relay accepted the connection)", bool(sess), str([l[-70:] for l in sess][:2]))
+    codec = logcat_lines(r"selected codec")
+    check("relay log: Bedrock_v844 selected for a protocol-844 client",
+          any("clientProtocol=844" in l and "protocol=844" in l and "mc=1.21.111" in l for l in codec), str([l[-90:] for l in codec][:2]))
+    check("the backend received RequestNetworkSettings with protocol 844 (forwarded by the relay)",
+          "RequestNetworkSettings protocol=844" in server_out)
+    got = re.search(r"CLIENT GOT \d+ bytes: ([0-9a-f]+)", out)
+    check("the client received the backend's NetworkSettings through the relay", bool(got) and "8f01" in got.group(1), got.group(1)[:60] if got else "no reply")
+    check("no crash during the relay test", not logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG)))
+
+
 def main():
     apk = sorted(glob.glob(os.path.join(WS, "apk", "*.apk")))[0]
     log("apk: %s" % apk)
@@ -186,6 +250,7 @@ def main():
     # ---- 1. install + consents ----------------------------------------------------------------------
     out = adb("install", "-r", "-g", apk, timeout=300)
     check("APK installs", "Success" in out, out.strip()[-80:])
+    pick_target()
     sh("appops set %s SYSTEM_ALERT_WINDOW allow" % PKG)
     sh("appops set %s ACTIVATE_VPN allow" % PKG)
     log("appops: " + sh("appops get %s SYSTEM_ALERT_WINDOW; appops get %s ACTIVATE_VPN" % (PKG, PKG)).strip().replace("\n", " | "))
@@ -323,6 +388,8 @@ def main():
             check("second session: VPN tunnel is up", bool(vpn_up()))
             screenshot("6-second-session")
             check("no crash in the second session", not logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG)))
+            if vpn_up():
+                relay_test()
     finish()
 
 
