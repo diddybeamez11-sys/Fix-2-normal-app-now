@@ -28,12 +28,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # the fixed tree, no probe: mapping / dex / R8-without-dontwarn analysis
-          - { name: fixed-plain, probe: 'false', awt: relocated }
           # the fixed tree + start-up probe -> runtime evidence on an emulator
           - { name: fixed-probe, probe: 'true', awt: relocated }
-          # control: the fixed tree WITHOUT the java.awt.Color relocation -> shows that failure on a real device
-          - { name: awt-before-probe, probe: 'true', awt: removed }
     env:
       GH_TOKEN: ${{ github.token }}
       NAME: ${{ matrix.name }}
@@ -141,7 +137,13 @@ jobs:
 
       - name: Gradle tail on failure
         if: failure()
-        run: tail -150 "$OUT/gradle-build.log" > "$OUT/05-gradle-tail.txt"
+        run: |
+          {
+            echo "== kotlin/java compiler diagnostics =="
+            grep -E '^(e|w): |error: ' "$OUT/gradle-build.log" | head -80
+            echo; echo "== what went wrong =="
+            sed -n '/What went wrong/,/Try:/p' "$OUT/gradle-build.log" | head -40
+          } > "$OUT/05-gradle-tail.txt"
 
       - name: Dependency report
         if: matrix.name == 'fixed-plain'
@@ -184,7 +186,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [fixed-probe, awt-before-probe]
+        name: [fixed-probe]
     env:
       GH_TOKEN: ${{ github.token }}
     steps:

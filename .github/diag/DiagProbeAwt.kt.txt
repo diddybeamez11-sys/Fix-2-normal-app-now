@@ -41,28 +41,29 @@ internal object DiagProbeAwt {
                 .trusted(true)
                 .build()
             val entry = PlayerListPacket.Entry(UUID.randomUUID())
-            entry.entityId = 42L
-            entry.name = "probe"
-            entry.xuid = ""
-            entry.platformChatId = ""
-            entry.buildPlatform = BuildPlatform.GOOGLE
-            entry.skin = skin
-            entry.isHost = false
-            entry.isTrustedSkin = true
-            entry.isSubClient = false
-            entry.color = Color(0xFF00AA55.toInt(), true)
+            entry.setEntityId(42L)
+            entry.setName("probe")
+            entry.setXuid("")
+            entry.setPlatformChatId("")
+            entry.setBuildPlatform(BuildPlatform.GOOGLE)
+            entry.setSkin(skin)
+            entry.setHost(false)
+            entry.setTrustedSkin(true)
+            entry.setSubClient(false)
+            entry.setColor(Color(0xFF00AA55.toInt(), true))
             val pkt = PlayerListPacket()
-            pkt.action = PlayerListPacket.Action.ADD
-            pkt.entries.add(entry)
+            pkt.setAction(PlayerListPacket.Action.ADD)
+            pkt.getEntries().add(entry)
 
             val buf = Unpooled.buffer()
             codec.tryEncode(helper, buf, pkt)
             val size = buf.readableBytes()
-            val id = codec.getPacketDefinition(PlayerListPacket::class.java).id
+            val id = codec.getPacketDefinition(PlayerListPacket::class.java).getId()
             val back = codec.tryDecode(helper, buf, id) as PlayerListPacket
-            val e = back.entries[0]
-            "id=" + id + " bytes=" + size + " entries=" + back.entries.size + " name=" + e.name +
-                " colour=" + Integer.toHexString(e.color.getRGB()) + " skinColour=" + Integer.toHexString(e.skin.color.getRGB())
+            val e = back.getEntries().get(0)
+            "id=" + id + " bytes=" + size + " entries=" + back.getEntries().size + " name=" + e.getName() +
+                " colour=" + Integer.toHexString(e.getColor().getRGB()) +
+                " skinColour=" + Integer.toHexString(e.getSkin().getColor().getRGB())
         }
     }
 }
