@@ -214,6 +214,14 @@ def summarize_pcap(path):
     return "\n".join(lines[:150]) + ("\n... (%d packets)" % len(lines) if len(lines) > 150 else "\n(%d packets)" % len(lines))
 
 
+def thread_count():
+    pid = sh("pidof %s" % PKG).strip().split()
+    if not pid:
+        return -1
+    out = sh("ls /proc/%s/task | wc -l" % pid[0]).strip()
+    return int(out) if out.isdigit() else -1
+
+
 def run_client(who, target, timeout=150):
     cmd = "/data/local/tmp/rakclient %s" % target if who is None else "su %s /data/local/tmp/rakclient %s" % (who, target)
     return sh(cmd, timeout=timeout)
@@ -263,6 +271,7 @@ def relay_test():
 
     # through VPN -> netstack -> Java relay -> stub backend
     outs = {}
+    threads_before = thread_count()
     for port in (19132, 19133):
         for who in ("%d,%d,3003" % (TARGET_UID, TARGET_UID), str(TARGET_UID)):
             out = run_client(who, "10.0.2.2:%d" % port)
@@ -271,6 +280,16 @@ def relay_test():
             if "CLIENT" in out:
                 break
         time.sleep(2)
+    # two more sessions on port 19132 to measure what every connection leaves behind
+    for n in (3, 4):
+        extra = run_client("%d,%d,3003" % (TARGET_UID, TARGET_UID), "10.0.2.2:19132")
+        log("RELAY extra run %d:\n%s" % (n, extra.strip()))
+    time.sleep(5)
+    threads_after = thread_count()
+    log("ProtoHax process threads: before the relay sessions=%d after 4 sessions=%d" % (threads_before, threads_after))
+    open(os.path.join(OUT, "24-thread-counts.txt"), "w").write(
+        "threads before: %d\nthreads after 4 sessions: %d\n(difference per session: %.1f)\n" % (
+            threads_before, threads_after, (threads_after - threads_before) / 4.0))
     time.sleep(3)
     cap.terminate()
     subprocess.run("sudo pkill tcpdump", shell=True)
