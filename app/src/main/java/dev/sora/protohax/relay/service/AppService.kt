@@ -73,12 +73,27 @@ class AppService : VpnService() {
             }
         } catch (t: Throwable) {
             logError("command", t)
+            if (ACTION_START == action) {
+                // Never leave a foreground service (and its notification) running when the VPN
+                // could not be started; the user has to know why nothing happened.
+                toast(getString(R.string.vpn_start_failed, t.message ?: t.javaClass.simpleName))
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
         }
         return super.onStartCommand(intent, flags, startId)
     }
 
     private fun startVPN() {
-		toast("Language selected ${Settings.languages.getValue(this).displayName}")
+        val targetPackage = MainActivity.targetPackage
+        if (targetPackage.isEmpty()) {
+            logError("no target application selected, aborting VPN start")
+            toast(R.string.dashboard_no_application)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+
         val (hasIPv4, hasIPv6) = when(Settings.ipv6Status.getValue(this)) {
 			Settings.IPv6Choices.AUTOMATIC -> checkNetState()
 			Settings.IPv6Choices.ENABLED -> true to true
@@ -90,7 +105,7 @@ class AppService : VpnService() {
         builder.setBlocking(true)
         builder.setMtu(VPN_MTU)
         builder.setSession("ProtoHax")
-        builder.addAllowedApplication(MainActivity.targetPackage)
+        builder.addAllowedApplication(targetPackage)
         builder.addDnsServer("8.8.8.8")
         // ipv4
         if (hasIPv4) {
@@ -103,7 +118,16 @@ class AppService : VpnService() {
             builder.addRoute("::", 0)
         }
 
-        val vpnDescriptor = builder.establish() ?: return
+        val vpnDescriptor = builder.establish()
+        if (vpnDescriptor == null) {
+            // establish() returns null when the VPN consent dialog was never accepted or when
+            // the system refuses to create a second tunnel (e.g. an always-on VPN is active).
+            logError("establish VPN failed: VPN permission denied or another VPN is active")
+            toast(R.string.vpn_permission_denied)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
         this.vpnDescriptor = vpnDescriptor
 
         val tun = TUN().apply {
@@ -120,11 +144,26 @@ class AppService : VpnService() {
         tun.start()
         logInfo("netstack started")
         isActive = true
+
+        // The overlay GUI has to be brought up even if the relay fails to start, and a broken
+        // overlay must not prevent the relay from running, so both steps are isolated from each
+        // other and neither can silently swallow the other one.
         try {
-			MinecraftRelay.announceRelayUp()
             serviceListeners.forEach { it.onServiceStarted() }
+            logInfo("overlay GUI created")
+            toast(R.string.overlay_hint)
         } catch (t: Throwable) {
-            logError("start callback", t)
+            logError("start overlay", t)
+            toast(getString(R.string.overlay_start_failed, t.message ?: t.javaClass.simpleName))
+            if (!android.provider.Settings.canDrawOverlays(this)) {
+                toast(R.string.request_overlay)
+            }
+        }
+
+        try {
+            MinecraftRelay.announceRelayUp()
+        } catch (t: Throwable) {
+            logError("start relay", t)
         }
     }
 
@@ -142,28 +181,36 @@ class AppService : VpnService() {
     }
 
     private fun checkNetState(): Pair<Boolean, Boolean> {
-		val connectivityManager = this.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-		val activeNetwork = connectivityManager.getLinkProperties(connectivityManager.activeNetwork ?: return true to false) ?: return true to false
-		val interfaceName = activeNetwork.interfaceName
+        // ConnectivityManager requires ACCESS_NETWORK_STATE (declared in the manifest) and can
+        // still fail on some devices, so a lookup error must never abort the VPN startup: fall
+        // back to the IPv4-only configuration instead.
+        try {
+            val connectivityManager = this.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = connectivityManager.activeNetwork ?: return true to false
+            val activeNetworkProperties = connectivityManager.getLinkProperties(activeNetwork) ?: return true to false
+            val interfaceName = activeNetworkProperties.interfaceName
 
-		val networkInterfaces = NetworkInterface.getNetworkInterfaces()
-		while (networkInterfaces.hasMoreElements()) {
-			val ni = networkInterfaces.nextElement()
-			if (ni.name != interfaceName) continue
+            val networkInterfaces = NetworkInterface.getNetworkInterfaces()
+            while (networkInterfaces.hasMoreElements()) {
+                val ni = networkInterfaces.nextElement()
+                if (ni.name != interfaceName) continue
 
-			var hasIPv4 = false
-			var hasIPv6 = false
-			for (addr in ni.interfaceAddresses) {
-				if (addr.address is Inet6Address) {
-					hasIPv6 = true
-				} else if (addr.address is Inet4Address) {
-					hasIPv4 = true
-				}
-			}
-			return hasIPv4 to hasIPv6
-		}
+                var hasIPv4 = false
+                var hasIPv6 = false
+                for (addr in ni.interfaceAddresses) {
+                    if (addr.address is Inet6Address) {
+                        hasIPv6 = true
+                    } else if (addr.address is Inet4Address) {
+                        hasIPv4 = true
+                    }
+                }
+                return hasIPv4 to hasIPv6
+            }
+        } catch (t: Throwable) {
+            logError("check net state", t)
+        }
 
-		return true to false
+        return true to false
     }
 
     private fun createNotification(): Notification {

@@ -5,6 +5,10 @@
     <string name="mitm_connected_launch">Launch App</string>
     <string name="mitm_disconnected">Disconnected from MITM proxy</string>
     <string name="request_overlay">We need overlay permission in order to display GUIs that you can interact in game</string>
+    <string name="vpn_start_failed">Failed to start ProtoHax: %1$s</string>
+    <string name="vpn_permission_denied">Unable to create the VPN connection. Tap Connect again and accept the system VPN dialog (and make sure no other VPN is active).</string>
+    <string name="overlay_start_failed">ProtoHax is running, but the in-game menu could not be shown: %1$s</string>
+    <string name="overlay_hint">ProtoHax is running. Tap the floating ProtoHax icon to open the menu.</string>
     <string name="proxy_notification">%1$s is processing packets for %2$s</string>
 
     <string name="dashboard_more">More</string>
