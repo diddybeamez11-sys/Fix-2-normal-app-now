@@ -1,0 +1,120 @@
+package dev.sora.protohax
+
+import android.os.Build
+import android.util.Log
+import dev.sora.protohax.relay.MinecraftRelay as AppRelay
+import dev.sora.relay.game.GameSession
+import dev.sora.relay.game.entity.EntityLocalPlayer
+import dev.sora.relay.game.management.BlobCacheManager
+import dev.sora.relay.game.registry.BlockMapping
+import dev.sora.relay.game.registry.ItemMapping
+import dev.sora.relay.game.registry.LegacyBlockMapping
+import dev.sora.relay.game.utils.MineUtils
+import dev.sora.relay.game.utils.constants.EnumFacing
+import dev.sora.relay.game.utils.constants.ItemTags
+import dev.sora.relay.game.world.Level
+import dev.sora.relay.session.listener.RelayListenerAutoCodec
+import org.cloudburstmc.math.vector.Vector2f
+import org.cloudburstmc.math.vector.Vector3f
+import org.cloudburstmc.math.vector.Vector3i
+import org.cloudburstmc.protocol.bedrock.codec.compat.BedrockCompat
+import org.cloudburstmc.protocol.bedrock.codec.v2193.Bedrock_v2193
+import org.cloudburstmc.protocol.bedrock.codec.v844.Bedrock_v844
+
+/**
+ * TEMPORARY startup probe, injected by .github/workflows/diag.yml only (never part of a product build).
+ *
+ * It forces the classes of the relay start-up chain to initialise one by one - lowest level first -
+ * on a real ART runtime with the real R8 output, and logs the complete cause chain of the FIRST
+ * failure of each one (later users of a failed class only see ART's plain NoClassDefFoundError).
+ */
+internal object DiagProbe {
+
+    private const val TAG = "DIAG"
+
+    private fun chain(t: Throwable): String {
+        val sb = StringBuilder()
+        var c: Throwable? = t
+        var depth = 0
+        while (c != null && depth < 8) {
+            sb.append(if (depth == 0) "  " else "  caused by: ")
+                .append(c.javaClass.name).append(": ").append(c.message).append('\n')
+            for (e in c.stackTrace.take(14)) {
+                sb.append("      at ").append(e.toString()).append('\n')
+            }
+            c = if (c.cause === c) null else c.cause
+            depth++
+        }
+        return sb.toString()
+    }
+
+    private fun step(name: String, block: () -> Any?) {
+        val t0 = System.currentTimeMillis()
+        try {
+            val r = block()
+            Log.i(TAG, "OK   " + name + " -> " + r + " (" + (System.currentTimeMillis() - t0) + " ms)")
+        } catch (t: Throwable) {
+            Log.e(TAG, "FAIL " + name + "\n" + chain(t))
+        }
+    }
+
+    private fun touch(cls: Class<*>) = step("init " + cls.name) {
+        Class.forName(cls.name, true, cls.classLoader)
+        "initialised"
+    }
+
+    fun start() {
+        Thread({
+            try {
+                Thread.sleep(3000)
+            } catch (e: InterruptedException) {
+                // ignore
+            }
+            execute()
+        }, "diag-probe").start()
+    }
+
+    private fun execute() {
+        Log.i(TAG, "BEGIN probe sdk=" + Build.VERSION.SDK_INT + " abis=" + Build.SUPPORTED_ABIS.joinToString())
+
+        // 1. math library: needs META-INF/services/org.cloudburstmc.math.vector.VectorProvider at runtime
+        step("Vector3f.from") { Vector3f.from(1f, 2f, 3f) }
+        step("Vector3i.from") { Vector3i.from(1, 2, 3) }
+        step("Vector2f.from") { Vector2f.from(1f, 2f) }
+
+        // 2. static initialisers reached by GameSession and its members (lowest level first)
+        touch(EnumFacing::class.java)
+        touch(ItemTags::class.java)
+        touch(MineUtils::class.java)
+        touch(LegacyBlockMapping::class.java)
+        touch(ItemMapping.Provider::class.java)
+        touch(BlockMapping.Provider::class.java)
+        step("ItemMapping.Provider.craftMapping(844)") { ItemMapping.Provider.craftMapping(844); "ok" }
+        step("BlockMapping.Provider.craftMapping(844)") { BlockMapping.Provider.craftMapping(844); "ok" }
+        touch(BlobCacheManager::class.java)
+        touch(EntityLocalPlayer::class.java)
+        touch(Level::class.java)
+        touch(GameSession::class.java)
+        step("new GameSession()") { GameSession(); "constructed" }
+
+        // 3. protocol codecs
+        touch(Bedrock_v844::class.java)
+        step("Bedrock_v844.CODEC") { "protocol=" + Bedrock_v844.CODEC.protocolVersion + " mc=" + Bedrock_v844.CODEC.minecraftVersion }
+        touch(BedrockCompat::class.java)
+        touch(Bedrock_v2193::class.java)
+        step("Bedrock_v2193.CODEC") { "protocol=" + Bedrock_v2193.CODEC.protocolVersion + " mc=" + Bedrock_v2193.CODEC.minecraftVersion }
+        touch(RelayListenerAutoCodec::class.java)
+        touch(dev.sora.relay.MinecraftRelay::class.java)
+
+        // 4. the application's own relay object and the exact call AppService makes
+        touch(AppRelay::class.java)
+        step("AppRelay.session") { AppRelay.session; "ok" }
+        step("AppRelay loader thread") {
+            AppRelay.loaderThread?.join(90000)
+            "modules registered=" + AppRelay.moduleManager.modules.size
+        }
+        step("AppRelay.announceRelayUp()") { AppRelay.announceRelayUp(); "relay up" }
+
+        Log.i(TAG, "END probe")
+    }
+}
