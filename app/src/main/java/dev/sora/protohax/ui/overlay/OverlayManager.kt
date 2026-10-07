@@ -16,14 +16,17 @@ import dev.sora.protohax.relay.MinecraftRelay
 import dev.sora.protohax.relay.service.ServiceListener
 import dev.sora.protohax.ui.overlay.menu.ConfigureMenu
 import dev.sora.relay.cheat.module.CheatModule
+import dev.sora.relay.utils.logError
 import kotlin.math.abs
 
 class OverlayManager : ServiceListener {
 
 	var currentContext: Context? = null
 
+	// the service context is only set while AppService is alive; falling back to the application
+	// context keeps the overlay buildable instead of throwing a NullPointerException
 	val ctx: Context
-		get() = currentContext!!
+		get() = currentContext ?: MyApplication.instance
 
 	private var entranceView: View? = null
 	var renderLayerView: RenderLayerView? = null
@@ -75,12 +78,35 @@ class OverlayManager : ServiceListener {
 		this.entranceView = imageView
 		wm.addView(imageView, params)
 
-		renderLayerView = RenderLayerView(ctx, wm, MinecraftRelay.session)
-		menu.visibility = false
-		menu.display(wm, ctx)
+		// every remaining part of the overlay is added on its own: a failure in one of them must
+		// not stop the others from showing up, otherwise the whole GUI silently never loads
+		try {
+			renderLayerView = RenderLayerView(ctx, wm, MinecraftRelay.session)
+		} catch (t: Throwable) {
+			logError("render layer", t)
+		}
+
+		val menuFailure: Throwable? = try {
+			menu.visibility = false
+			menu.display(wm, ctx)
+			null
+		} catch (t: Throwable) {
+			logError("configure menu", t)
+			t
+		}
 
 		shortcuts.forEach {
-			it.display(wm)
+			try {
+				it.display(wm)
+			} catch (t: Throwable) {
+				logError("shortcut ${it.module.name}", t)
+			}
+		}
+
+		// the menu is what the entrance icon opens, so without it the overlay is useless -
+		// let AppService know so it can tell the user instead of leaving a dead icon behind
+		if (menuFailure != null) {
+			throw menuFailure
 		}
 	}
 
@@ -93,13 +119,34 @@ class OverlayManager : ServiceListener {
 
 	override fun onServiceStopped() {
 		val wm = MyApplication.instance.getSystemService(VpnService.WINDOW_SERVICE) as WindowManager
-		entranceView?.let { wm.removeView(it) }
+		// removeView throws for anything that is not attached, and the overlay may only have been
+		// built partially. Tear every part down independently so a stuck overlay window can never
+		// survive into the next session and block the GUI from loading again.
+		entranceView?.let {
+			try {
+				wm.removeView(it)
+			} catch (t: Throwable) {
+				logError("remove entrance view", t)
+			}
+		}
 		entranceView = null
-		renderLayerView?.destroy()
+		try {
+			renderLayerView?.destroy()
+		} catch (t: Throwable) {
+			logError("destroy render layer", t)
+		}
 		renderLayerView = null
-		menu.destroy(wm)
+		try {
+			menu.destroy(wm)
+		} catch (t: Throwable) {
+			logError("destroy configure menu", t)
+		}
 		shortcuts.forEach {
-			it.remove(wm)
+			try {
+				it.remove(wm)
+			} catch (t: Throwable) {
+				logError("remove shortcut ${it.module.name}", t)
+			}
 		}
 	}
 

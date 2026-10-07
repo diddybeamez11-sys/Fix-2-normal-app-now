@@ -160,6 +160,15 @@ private fun BottomFloatingActionButton(
     val vpnRequestLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == Activity.RESULT_OK) {
             connectVPN()
+        } else {
+            // dismissing the system VPN dialog used to be a silent dead end: nothing started,
+            // nothing was said, so it looked like the button simply did not work
+            scope.launch {
+                snackbarHostState.showSnackbar(
+                    message = mContext.getString(R.string.vpn_permission_denied),
+                    duration = SnackbarDuration.Long
+                )
+            }
         }
     }
     fun checkVPN() {
@@ -173,6 +182,9 @@ private fun BottomFloatingActionButton(
     val overlayRequestLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
 		if (Settings.canDrawOverlays(mContext)) {
             checkVPN()
+        } else {
+            // without SYSTEM_ALERT_WINDOW the in-game menu cannot be drawn at all
+            mContext.toast(R.string.request_overlay)
         }
     }
 
