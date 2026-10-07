@@ -36,6 +36,7 @@ class AppService : VpnService() {
     private var tun: TUN? = null
 
     override fun onCreate() {
+        super.onCreate()
         val notificationManager = getSystemService(Service.NOTIFICATION_SERVICE) as NotificationManager
         if (notificationManager.getNotificationChannel(CHANNEL_ID) == null) {
             notificationManager.createNotificationChannel(NotificationChannel(
@@ -61,8 +62,10 @@ class AppService : VpnService() {
         val action = intent.action
         try {
             if (ACTION_START == action) {
-                startVPN()
+                // Promote the service immediately. Starting the VPN/TUN can take long enough
+                // that Android may otherwise kill the service before it enters foreground.
                 startForeground(1, createNotification())
+                startVPN()
             } else {
                 stopVPN()
                 stopForeground(STOP_FOREGROUND_REMOVE)
