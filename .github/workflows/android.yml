@@ -387,15 +387,21 @@ jobs:
           python3 .github/protohax/verify_jar.py app/libs/ProtoHax-1.4.0.jar
 
       # ---------------------------------------------------------
-      # Publish the verified jar to app/libs (dispatch only)
+      # Publish the verified jar to app/libs
       #
       # app/libs/ProtoHax-1.4.0.jar is what a local build
       # (./gradlew app:assembleRelease) packages, so keeping the committed
       # jar current is what makes a local build produce a client that can
       # join 1.21.111 servers.
+      #
+      # Triggers: workflow_dispatch with publish_jar=true, or a pushed commit
+      # whose message contains [publish-jar]. The commit this step makes does
+      # not contain the marker, so it cannot chain.
       # ---------------------------------------------------------
       - name: Publish ProtoHax JAR to app/libs
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_jar
+        if: |
+          (github.event_name == 'workflow_dispatch' && inputs.publish_jar)
+          || contains(github.event.head_commit.message, '[publish-jar]')
         run: |
           set -e
 
