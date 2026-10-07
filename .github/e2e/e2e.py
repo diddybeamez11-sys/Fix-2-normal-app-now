@@ -242,7 +242,7 @@ def thread_count():
     return int(out) if out.isdigit() else -1
 
 
-def write_thread_dump(dump):
+def write_thread_dump(dump, tag="x"):
     """names + states of all threads, and the top frames of the interesting ones (netty loops, RakRelay, relay-start)"""
     blocks = re.split(r"\n(?=\")", dump)
     lines = ["ART thread dump: %d chars, %d blocks" % (len(dump), len(blocks)), ""]
@@ -261,7 +261,7 @@ def write_thread_dump(dump):
     for name, frames in interesting:
         lines.append("== %s" % name)
         lines += ["     " + f for f in frames]
-    open(os.path.join(OUT, "25-thread-dump.txt"), "w").write("\n".join(lines))
+    open(os.path.join(OUT, "25-thread-dump-%s.txt" % tag), "w").write("\n".join(lines))
 
 
 def run_client(who, target, timeout=150):
@@ -310,45 +310,48 @@ def relay_test():
         return open(path).read().count("RequestNetworkSettings protocol=844")
 
     base = {port: count_req(logs[port]) for port in (19132, 19133)}
-
-    # through VPN -> netstack -> Java relay -> stub backend
-    outs = {}
-    threads_before = thread_count()
-    for port in (19132, 19133):
-        for who in ("%d,%d,3003" % (TARGET_UID, TARGET_UID), str(TARGET_UID)):
-            out = run_client(who, "10.0.2.2:%d" % port)
-            log("RELAY run (su %s, port %d):\n%s" % (who, port, out.strip()))
-            outs[port] = out
-            if "CLIENT" in out:
-                break
-        time.sleep(2)
-    # two more sessions on port 19132: they stall - take an ART thread dump while the third one is stuck
-    log("cpu cores: %s" % sh("nproc").strip())
-    pid = (sh("pidof %s" % PKG).strip().split() or [""])[0]
     who = "%d,%d,3003" % (TARGET_UID, TARGET_UID)
-    for n in (3, 4):
-        if n == 3:
-            proc = subprocess.Popen(["adb", "shell", "su %s /data/local/tmp/rakclient 10.0.2.2:19132" % who],
-                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            time.sleep(12)
-            sh("rm -f /data/anr/*; kill -3 %s" % pid)
-            time.sleep(4)
-            dump = sh("cat /data/anr/* 2>/dev/null | head -c 900000", timeout=120)
-            try:
-                extra = proc.communicate(timeout=90)[0].decode("utf-8", "replace")
-            except Exception:  # noqa
-                proc.kill()
-                extra = "(client did not finish)"
-            write_thread_dump(dump)
-        else:
-            extra = run_client(who, "10.0.2.2:19132")
-        log("RELAY extra run %d:\n%s" % (n, extra.strip()))
+    dumps = []
+
+    def run_session(port, idx):
+        """one client session through VPN -> netstack -> relay; a thread dump is taken if it gets stuck"""
+        proc = subprocess.Popen(["adb", "shell", "su %s /data/local/tmp/rakclient 10.0.2.2:%d" % (who, port)],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        t0 = time.time()
+        while proc.poll() is None and time.time() - t0 < 70:
+            if not dumps and time.time() - t0 > 8:
+                pid = (sh("pidof %s" % PKG).strip().split() or [""])[0]
+                sh("rm -f /data/anr/*; kill -3 %s" % pid)
+                time.sleep(4)
+                write_thread_dump(sh("cat /data/anr/* 2>/dev/null | head -c 900000", timeout=120), "session%d" % idx)
+                dumps.append(idx)
+            time.sleep(0.5)
+        try:
+            return proc.communicate(timeout=40)[0].decode("utf-8", "replace")
+        except Exception:  # noqa
+            proc.kill()
+            return "(client did not finish)"
+
+    log("cpu cores: %s" % sh("nproc").strip())
+    threads_before = thread_count()
+    outs = {}
+    results = []
+    sessions = [19132, 19133] * 4
+    for idx, port in enumerate(sessions, 1):
+        out = run_session(port, idx)
+        log("RELAY session %d (port %d):\n%s" % (idx, port, out.strip()))
+        outs[port] = out
+        results.append(got_settings(out))
+        time.sleep(1)
     time.sleep(5)
     threads_after = thread_count()
-    log("ProtoHax process threads: before the relay sessions=%d after 4 sessions=%d" % (threads_before, threads_after))
+    log("ProtoHax process threads: before the %d relay sessions=%d after=%d" % (len(sessions), threads_before, threads_after))
     open(os.path.join(OUT, "24-thread-counts.txt"), "w").write(
-        "threads before: %d\nthreads after 4 sessions: %d\n(difference per session: %.1f)\n" % (
-            threads_before, threads_after, (threads_after - threads_before) / 4.0))
+        "threads before: %d\nthreads after %d sessions: %d\n(difference per session: %.2f)\n" % (
+            threads_before, len(sessions), threads_after, (threads_after - threads_before) / float(len(sessions))))
+    ok = sum(results)
+    check("relay sessions: all %d consecutive sessions got NetworkSettings back through the relay" % len(sessions),
+          ok == len(sessions), "%d/%d ok: %s" % (ok, len(sessions), ["ok" if r else "STUCK" for r in results]))
     time.sleep(3)
     cap.terminate()
     subprocess.run("sudo pkill tcpdump", shell=True)
@@ -362,19 +365,18 @@ def relay_test():
     open(os.path.join(OUT, "23-rak-client-output.txt"), "w").write(
         "\n".join("== relay run, port %d ==\n%s" % (p, o) for p, o in outs.items()))
 
-    for port in (19132, 19133):
-        out = outs.get(port, "")
-        check("relay test (port %d): the client completed the RakNet handshake through VPN -> netstack -> relay" % port,
-              "CLIENT CONNECTED" in out, out.strip()[:100].replace("\n", " | "))
-        forwarded = count_req(logs[port]) - base[port]
-        check("relay test (port %d): the backend received RequestNetworkSettings(844) forwarded by the relay" % port,
-              forwarded >= 1, "%d forwarded request(s)" % forwarded)
-        check("relay test (port %d): the client received NetworkSettings through the relay" % port, got_settings(out))
+    forwarded = sum(count_req(logs[p]) - base[p] for p in (19132, 19133))
+    check("the backends received RequestNetworkSettings(844) forwarded by the relay in every session",
+          forwarded >= len(sessions), "%d forwarded request(s) for %d sessions" % (forwarded, len(sessions)))
+    check("the client completed the RakNet handshake through VPN -> netstack -> relay in every session",
+          all("CLIENT CONNECTED" in o for o in outs.values()))
     sess = logcat_lines(r"SessionCreation")
-    check("relay log: SessionCreation (the Java relay accepted the connection)", bool(sess), str([l[-70:] for l in sess][:2]))
+    check("relay log: SessionCreation for every session (the Java relay accepted the connection)", len(sess) >= len(sessions),
+          "%d SessionCreation lines" % len(sess))
     codec = logcat_lines(r"selected codec")
-    check("relay log: Bedrock_v844 selected for a protocol-844 client",
-          any("clientProtocol=844" in l and "protocol=844" in l and "mc=1.21.111" in l for l in codec), str([l[-90:] for l in codec][:2]))
+    check("relay log: Bedrock_v844 selected for every protocol-844 client",
+          sum(1 for l in codec if "clientProtocol=844" in l and "protocol=844" in l and "mc=1.21.111" in l) >= len(sessions),
+          "%d 'selected codec' lines" % len(codec))
     check("no crash during the relay test", not logcat_lines(r"FATAL EXCEPTION|ANR in " + re.escape(PKG) + "|AndroidRuntime: Process: " + re.escape(PKG)))
 
 
