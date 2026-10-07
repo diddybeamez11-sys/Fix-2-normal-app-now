@@ -11,7 +11,7 @@ import java.io.Serializable;
  * {@code NoClassDefFoundError} as soon as a server sends such a packet.
  *
  * <p>The ProtoHax build relocates every reference to {@code java.awt.Color} to this class (see
- * {@code .github/protohax/apply_android_patches.py}). Only the members the bundled libraries use are
+ * {@code .github/protohax/relocate_awt_color.py}). Only the members the bundled libraries use are
  * provided, with the exact semantics of the JDK class:
  * the four constructors, {@code getRed/Green/Blue/Alpha}, {@code getRGB}, {@code equals}, {@code hashCode}
  * and {@code toString}.

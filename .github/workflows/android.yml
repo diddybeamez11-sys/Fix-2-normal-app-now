@@ -36,6 +36,17 @@ jobs:
           submodules: true
 
       # ---------------------------------------------------------
+      # Checkout the Bedrock protocol data of the target version
+      # (pmmp/BedrockData, CC0, tag bedrock-1.21.111 = protocol 844)
+      # ---------------------------------------------------------
+      - name: Checkout Bedrock 1.21.111 protocol data
+        uses: actions/checkout@v7
+        with:
+          repository: pmmp/BedrockData
+          ref: 7484fe3c3d7949fd48cc520add4f7eeebc4ba4af
+          path: BedrockData
+
+      # ---------------------------------------------------------
       # Java 21
       # ---------------------------------------------------------
       - name: Set up JDK 21
@@ -235,11 +246,11 @@ jobs:
             ProtoHax/src/main/java/dev/sora/relay/session/listener/xbox/XboxDeviceInfo.kt
 
       # ---------------------------------------------------------
-      # Target Minecraft Bedrock 1.21.111 (protocol 844) and make the
-      # protocol library usable on Android (java.awt.Color)
+      # Target Minecraft Bedrock 1.21.111 (protocol 844): version, pong and
+      # registry data; add the java.awt.Color stand-in used on Android
       # ---------------------------------------------------------
       - name: Patch ProtoHax for Bedrock v844 and Android
-        run: python3 .github/protohax/apply_android_patches.py ProtoHax
+        run: python3 .github/protohax/apply_android_patches.py ProtoHax BedrockData
 
       # ---------------------------------------------------------
       # Build ProtoHax
@@ -253,6 +264,13 @@ jobs:
             shadowJar \
             --stacktrace \
             --no-daemon
+
+      # ---------------------------------------------------------
+      # Android has no java.awt: point the protocol library's
+      # java.awt.Color references at the bundled stand-in
+      # ---------------------------------------------------------
+      - name: Relocate java.awt.Color
+        run: python3 .github/protohax/relocate_awt_color.py ProtoHax/build/libs/ProtoHax-1.4.0.jar
 
       # ---------------------------------------------------------
       # Copy and clean ProtoHax JAR
