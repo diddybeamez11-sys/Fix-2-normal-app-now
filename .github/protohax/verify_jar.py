@@ -11,6 +11,8 @@ into the APK). Every check below corresponds to a real failure that happened or 
     block / item registry data of protocol 844 must exist (otherwise a 1.21.111 session silently uses the
     1.20.10 data of the mcpedata submodule).
   * no class may still reference java.awt.Color (Android has no java.awt).
+  * the relay's RakNet client GUID must be negative like the vanilla client's (go-raknet based servers - Dragonfly
+    and many community servers - silently ignore positive ones, so about every second connect would time out).
   * the Microsoft OAuth fix (authorization_code on first login, refresh_token afterwards) must be in the jar.
 
 usage: verify_jar.py <ProtoHax jar>
@@ -68,6 +70,11 @@ if b"Bedrock_v2193" in relay:
 session = raw("dev/sora/relay/game/GameSession.class")
 if b"1.21.111" not in session or b"1.26.50" in session:
     problems.append("GameSession.RECOMMENDED_VERSION is not 1.21.111")
+
+# 2b. the relay's RakNet client GUID must be negative (Long.MIN_VALUE is OR-ed in: a CONSTANT_Long 0x8000000000000000)
+initializer = raw("dev/sora/relay/MinecraftRelay$BedrockRelayInitializer.class")
+if b"\x05\x80\x00\x00\x00\x00\x00\x00\x00" not in initializer:
+    problems.append("the relay's RakNet client GUID is not forced negative (go-raknet servers reject positive GUIDs)")
 
 # 3. java.awt.Color must be gone, its replacement present
 if "dev/sora/relay/compat/Color.class" not in names:

@@ -12,7 +12,8 @@ replaces `app/libs/ProtoHax-1.4.0.jar` before the APK is built:
 * `.github/protohax/apply_android_patches.py` targets Minecraft Bedrock 1.21.111 (protocol 844): the dashboard /
   RakNet pong version, and the block, item and block-hardness registry data of that version. ProtoHax's own
   `mcpedata` data stops at protocol 594 (1.20.10), so it is generated from `pmmp/BedrockData` (CC0), pinned in
-  `android.yml` to the `bedrock-1.21.111` tag (protocol 844);
+  `android.yml` to the `bedrock-1.21.111` tag (protocol 844). It also makes the relay's RakNet client GUID negative
+  like the vanilla client's - servers built on go-raknet (Dragonfly, many community servers) reject positive GUIDs;
 * `.github/protohax/relocate_awt_color.py` points the `java.awt.Color` references of the Cloudburst protocol
   classes - Android has no `java.awt` - at a small stand-in (`Color.java`) that is built into the jar;
 * `.github/protohax/verify_jar.py` fails the build if the registry assets (of the submodule and of protocol 844)

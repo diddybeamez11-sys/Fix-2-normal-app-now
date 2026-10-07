@@ -21,7 +21,14 @@ usage: apply_android_patches.py <ProtoHax checkout> <pmmp/BedrockData checkout>
    java.awt.Color reference of the shaded jar at it (Shadow's own relocate cannot be used: the pinned Shadow
    8.0.0 bundles an ASM that cannot read the Java 21 class files ProtoHax is compiled to).
 
-3. Registry data for protocol 844
+3. RakNet client GUID
+   The relay connects to the real server with a RakNet client whose GUID is Random.nextLong() - positive half
+   of the time. The vanilla Bedrock client's GUID is always negative (go-raknet, which Dragonfly and many
+   community servers are built on: "This should always be negative as per the vanilla client implementation"),
+   and such servers silently ignore OpenConnectionRequest2 of a positive GUID ("invalid ClientGUID ... expected
+   negative"), so about every second connection attempt ends in a connect timeout. The sign bit is set.
+
+4. Registry data for protocol 844
    ProtoHax resolves block / item definitions with MappingProvider.craftMapping(protocol), which takes the
    newest data set <= the protocol. The data of its `mcpedata` submodule ends at protocol 594 (Minecraft
    1.20.10), so a 1.21.111 session would silently use 1.20.10 block palettes. The same data is published
@@ -81,7 +88,14 @@ target.parent.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(here / "Color.java", target)
 print("added %s" % target.relative_to(root))
 
-# --- 3. registry data for protocol 844 ------------------------------------------------------------------
+# --- 3. RakNet client GUID: negative like the vanilla client ---------------------------------------------
+patch(src + "MinecraftRelay.kt",
+      "RakChannelOption.RAK_PROTOCOL_VERSION))\n\t\t\t\t.option(RakChannelOption.RAK_GUID, Random.nextLong())",
+      "RakChannelOption.RAK_PROTOCOL_VERSION))\n"
+      "\t\t\t\t// the vanilla client's RakNet GUID is always negative (servers built on go-raknet reject positive ones)\n"
+      "\t\t\t\t.option(RakChannelOption.RAK_GUID, Random.nextLong() or Long.MIN_VALUE)")
+
+# --- 4. registry data for protocol 844 ------------------------------------------------------------------
 info = json.loads((bedrock_data / "protocol_info.json").read_text())["version"]
 version = "%d.%d.%d" % (info["major"], info["minor"], info["patch"])
 if info["protocol_version"] != TARGET_PROTOCOL or version != TARGET_VERSION or info["beta"]:
