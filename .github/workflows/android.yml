@@ -16,10 +16,15 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # "contents: write" is only used by the optional "Publish ProtoHax JAR"
-    # step (workflow_dispatch with publish_jar=true).
+    # "contents: write" is used by the optional "Publish ProtoHax JAR" step
+    # (workflow_dispatch with publish_jar=true, or a pushed commit whose
+    # message contains [publish-jar]).
+    # "checks: write" lets that step report its failure trace through a check
+    # run and annotations, which stay readable even when job logs cannot be
+    # downloaded.
     permissions:
       contents: write
+      checks: write
 
     steps:
       # ---------------------------------------------------------
@@ -387,34 +392,10 @@ jobs:
           python3 .github/protohax/verify_jar.py app/libs/ProtoHax-1.4.0.jar
 
       # ---------------------------------------------------------
-      # Publish the verified jar to app/libs
-      #
-      # app/libs/ProtoHax-1.4.0.jar is what a local build
-      # (./gradlew app:assembleRelease) packages, so keeping the committed
-      # jar current is what makes a local build produce a client that can
-      # join 1.21.111 servers.
-      #
-      # Triggers: workflow_dispatch with publish_jar=true, or a pushed commit
-      # whose message contains [publish-jar]. The commit this step makes does
-      # not contain the marker, so it cannot chain.
+      # The "Publish ProtoHax JAR to app/libs" step runs at the very end
+      # of this job (after "Upload APK"): a publish problem must never
+      # keep the APK from being built and uploaded.
       # ---------------------------------------------------------
-      - name: Publish ProtoHax JAR to app/libs
-        if: |
-          (github.event_name == 'workflow_dispatch' && inputs.publish_jar)
-          || contains(github.event.head_commit.message, '[publish-jar]')
-        run: |
-          set -e
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/libs/ProtoHax-1.4.0.jar
-
-          if git diff --cached --quiet; then
-            echo "app/libs/ProtoHax-1.4.0.jar is already up to date"
-          else
-            git commit -m "Update the vendored ProtoHax jar (Minecraft 1.21.111 / protocol 844, registry data, java.awt.Color relocated)"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
 
       # ---------------------------------------------------------
       # Make Gradle executable
@@ -487,3 +468,215 @@ jobs:
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           overwrite: true
+
+      # ---------------------------------------------------------
+      # Upload the built ProtoHax JAR
+      #
+      # This is the exact file the "Publish" step below commits to
+      # app/libs: uploading it means a known-good jar can always be
+      # downloaded for a local build, even if a push ever fails.
+      # ---------------------------------------------------------
+      - name: Upload ProtoHax JAR
+        uses: actions/upload-artifact@v7
+        with:
+          name: ProtoHax-JAR-${{ github.sha }}
+          path: app/libs/ProtoHax-1.4.0.jar
+          if-no-files-found: error
+          overwrite: true
+
+      # ---------------------------------------------------------
+      # Publish the verified jar to app/libs
+      #
+      # app/libs/ProtoHax-1.4.0.jar is what a local build
+      # (./gradlew app:assembleRelease) packages, so keeping the committed
+      # jar current is what makes a local build produce a client that can
+      # join 1.21.111 servers.
+      #
+      # This step runs last on purpose: when it fails, the APK above is
+      # already built and uploaded.
+      #
+      # Triggers: workflow_dispatch with publish_jar=true, or a pushed commit
+      # whose message contains [publish-jar]. The commit this step makes does
+      # not contain the marker, so it cannot chain.
+      #
+      # Three independent mechanisms are tried in order:
+      #   1. git push with the credentials actions/checkout configured,
+      #   2. git push with an explicit token URL,
+      #   3. a commit created through the Git data REST API.
+      # If all of them fail, the whole command trace is reported through a
+      # check run and error annotations, which are readable through the API
+      # even when job logs cannot be downloaded.
+      # ---------------------------------------------------------
+      - name: Publish ProtoHax JAR to app/libs
+        if: |
+          (github.event_name == 'workflow_dispatch' && inputs.publish_jar)
+          || contains(github.event.head_commit.message, '[publish-jar]')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -u
+
+          TRACE=$(mktemp)
+          export TRACE
+
+          run() {
+            printf '\n$ %s\n' "$*" >> "$TRACE"
+            "$@" >> "$TRACE" 2>&1
+            rc=$?
+            printf '[exit %s]\n' "$rc" >> "$TRACE"
+            return $rc
+          }
+
+          run git remote -v
+          run git log --oneline -3
+          run git rev-parse --abbrev-ref HEAD
+          run git status --short
+          {
+            echo
+            echo '$ repo permissions of this job token / credential header size'
+            gh api "repos/${GITHUB_REPOSITORY}" --jq '.permissions' || true
+            git config --get-all 'http.https://github.com/.extraheader' 2>/dev/null | wc -c
+          } >> "$TRACE" 2>&1
+
+          fail() {
+            cat "$TRACE"
+            python3 - <<'PY' || true
+          import json
+          import os
+          import subprocess
+
+          trace = open(os.environ["TRACE"], errors="replace").read()
+          text = (trace[-60000:] or "(empty)").replace("```", "'''")
+          payload = {
+              "name": "publish-jar-diagnostic-%s" % os.environ.get("GITHUB_RUN_ID", ""),
+              "head_sha": os.environ["GITHUB_SHA"],
+              "status": "completed",
+              "conclusion": "failure",
+              "output": {
+                  "title": "publish-jar failed (readable copy of the trace)",
+                  "summary": "publish-jar trace, tail",
+                  "text": "```\n%s\n```" % text,
+              },
+          }
+          subprocess.run(
+              [
+                  "gh",
+                  "api",
+                  "-X",
+                  "POST",
+                  "repos/%s/check-runs" % os.environ["GITHUB_REPOSITORY"],
+                  "--input",
+                  "-",
+              ],
+              input=json.dumps(payload).encode(),
+              check=False,
+          )
+
+          lines = [line for line in trace.splitlines() if line.strip()]
+          for n, chunk in enumerate(
+              [" | ".join(lines[i:i + 8]) for i in range(0, len(lines), 8)][-9:], 1
+          ):
+              message = chunk.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")[:900]
+              print("::error title=publish-jar %d::%s" % (n, message))
+          PY
+            exit 1
+          }
+
+          run git config user.name "github-actions[bot]" || fail
+          run git config user.email "41898282+github-actions[bot]@users.noreply.github.com" || fail
+          run git add app/libs/ProtoHax-1.4.0.jar || fail
+
+          if git diff --cached --quiet; then
+            echo "app/libs/ProtoHax-1.4.0.jar is already up to date"
+            exit 0
+          fi
+
+          run git commit -m "Update the vendored ProtoHax jar (Minecraft 1.21.111 / protocol 844, registry data, java.awt.Color relocated)" || fail
+
+          echo "--- mechanism 1: git push with the checkout credentials ---"
+          if run git push origin "HEAD:${GITHUB_REF_NAME}"; then
+            echo "published with git push"
+            exit 0
+          fi
+
+          echo "--- mechanism 2: git push with an explicit token URL ---"
+          if run git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${GITHUB_REF_NAME}"; then
+            echo "published with an explicit token URL"
+            exit 0
+          fi
+
+          echo "--- mechanism 3: commit through the Git data REST API ---"
+
+          cat > /tmp/publish_api.py <<'PY'
+          import base64
+          import json
+          import os
+          import subprocess
+          import sys
+
+          REPO = os.environ["GITHUB_REPOSITORY"]
+          BRANCH = os.environ["GITHUB_REF_NAME"]
+          PATH = "app/libs/ProtoHax-1.4.0.jar"
+          MESSAGE = (
+              "Update the vendored ProtoHax jar (Minecraft 1.21.111 / "
+              "protocol 844, registry data, java.awt.Color relocated)"
+          )
+
+
+          def api(method, endpoint, payload=None, jq=None):
+              cmd = ["gh", "api", "-X", method, "repos/%s/%s" % (REPO, endpoint)]
+              if jq is not None:
+                  cmd += ["--jq", jq]
+              if payload is not None:
+                  cmd += ["--input", "-"]
+              proc = subprocess.run(
+                  cmd,
+                  input=json.dumps(payload).encode() if payload is not None else None,
+                  capture_output=True,
+              )
+              if proc.returncode != 0:
+                  sys.exit(
+                      "REST API %s %s failed: %s"
+                      % (method, endpoint, proc.stderr.decode(errors="replace")[-2000:])
+                  )
+              return proc.stdout.decode(errors="replace").strip()
+
+
+          head = api("GET", "git/ref/heads/%s" % BRANCH, jq=".object.sha")
+          blob = api(
+              "POST",
+              "git/blobs",
+              {
+                  "content": base64.b64encode(open(PATH, "rb").read()).decode(),
+                  "encoding": "base64",
+              },
+              jq=".sha",
+          )
+          tree = api("GET", "git/commits/%s" % head, jq=".tree.sha")
+          new_tree = api(
+              "POST",
+              "git/trees",
+              {
+                  "base_tree": tree,
+                  "tree": [
+                      {"path": PATH, "mode": "100644", "type": "blob", "sha": blob}
+                  ],
+              },
+              jq=".sha",
+          )
+          commit = api(
+              "POST",
+              "git/commits",
+              {"message": MESSAGE, "tree": new_tree, "parents": [head]},
+              jq=".sha",
+          )
+          api("PATCH", "git/refs/heads/%s" % BRANCH, {"sha": commit, "force": False})
+          print("published through the REST API as %s" % commit)
+          PY
+
+          if run python3 /tmp/publish_api.py; then
+            echo "published through the REST API"
+            exit 0
+          fi
+
+          fail
