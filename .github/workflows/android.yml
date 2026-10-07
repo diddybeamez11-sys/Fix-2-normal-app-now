@@ -584,7 +584,9 @@ jobs:
 
           run git config user.name "github-actions[bot]" || fail
           run git config user.email "41898282+github-actions[bot]@users.noreply.github.com" || fail
-          run git add app/libs/ProtoHax-1.4.0.jar || fail
+          # -f: app/.gitignore has /libs, so git refuses a plain "add" for this
+          # path (exit 1, "paths are ignored") even though the jar is tracked.
+          run git add -f app/libs/ProtoHax-1.4.0.jar || fail
 
           if git diff --cached --quiet; then
             echo "app/libs/ProtoHax-1.4.0.jar is already up to date"

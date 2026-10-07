@@ -36,9 +36,23 @@ GitHub Actions rebuilds ProtoHax from source at the pinned revision
 (`Alextheplayer919/ProtoHax@962b9622`, without submodules - the vendored data is used instead) on every push and
 runs the same patch / relocate / verify steps against the result.
 
-To refresh the committed `app/libs/ProtoHax-1.4.0.jar` (for example after changing a patch), dispatch the
-`Android CI` workflow with `publish_jar = true`: the verified jar is committed back to the branch, and local
-builds pick it up.
+To refresh the committed `app/libs/ProtoHax-1.4.0.jar` (for example after changing a patch), either dispatch the
+`Android CI` workflow with `publish_jar = true`, or push a commit whose message contains `[publish-jar]`. The
+verified jar is then committed back to the branch and local builds pick it up.
+
+That publish step is the last step of the job, so a publish problem never keeps the APK from being built, and the
+built jar is always available as the `ProtoHax-JAR-<commit>` workflow artifact. The step tries `git push` with the
+checkout credentials, then `git push` with an explicit token URL, then a commit through the Git data REST API. If
+all three fail, it writes the whole command trace into a check run named `publish-jar-diagnostic-<run id>` and into
+error annotations on the commit, both readable through the API.
+
+If you replace the jar by hand, note that `app/.gitignore` ignores `/libs`: git then refuses a plain `git add` with
+"paths are ignored", even though the jar is tracked. Use:
+
+```bash
+git add -f app/libs/ProtoHax-1.4.0.jar
+git commit -m "Update the vendored ProtoHax jar"
+```
 
 Build locally:
 
