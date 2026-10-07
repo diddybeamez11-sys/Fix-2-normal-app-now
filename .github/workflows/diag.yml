@@ -28,7 +28,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # the fixed tree + start-up probe -> runtime evidence on an emulator
+          # the final tree, no probe: mapping / dex / R8-without-dontwarn analysis
+          - { name: fixed-plain, probe: 'false', awt: relocated }
+          # the final tree + start-up probe -> runtime evidence on an emulator
           - { name: fixed-probe, probe: 'true', awt: relocated }
     env:
       GH_TOKEN: ${{ github.token }}
