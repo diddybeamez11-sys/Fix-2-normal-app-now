@@ -11,6 +11,7 @@ into the APK). Every check below corresponds to a real failure that happened or 
     block / item registry data of protocol 844 must exist (otherwise a 1.21.111 session silently uses the
     1.20.10 data of the mcpedata submodule).
   * no class may still reference java.awt.Color (Android has no java.awt).
+  * the Microsoft OAuth fix (authorization_code on first login, refresh_token afterwards) must be in the jar.
 
 usage: verify_jar.py <ProtoHax jar>
 """
@@ -78,9 +79,16 @@ offenders = [
 if offenders:
     problems.append("%d classes still reference java.awt.Color, e.g. %s" % (len(offenders), sorted(offenders)[:5]))
 
+# 4. the Microsoft OAuth fix (patched into XboxDeviceInfo by android.yml): first login = authorization_code,
+#    later logins = refresh_token
+oauth = raw("dev/sora/relay/session/listener/xbox/XboxDeviceInfo.class")
+for needle in (b"exchangeAuthorizationCode", b"refreshAccessToken", b"authorization_code", b"refresh_token"):
+    if needle not in oauth:
+        problems.append("OAuth fix missing: XboxDeviceInfo does not contain %s" % needle.decode())
+
 if problems:
     print("ProtoHax jar verification FAILED:")
     for p in problems:
         print("  - " + p)
     sys.exit(1)
-print("ProtoHax jar verification passed: mcpedata assets present, v844 configured, no java.awt.Color left")
+print("ProtoHax jar verification passed: registry assets present, v844 configured, no java.awt.Color left, OAuth fix present")
