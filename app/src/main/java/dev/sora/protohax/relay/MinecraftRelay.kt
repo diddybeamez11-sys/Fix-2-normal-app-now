@@ -28,6 +28,7 @@ import dev.sora.relay.session.listener.RelayListenerEncryptedSession
 import dev.sora.relay.session.listener.RelayListenerNetworkSettings
 import dev.sora.relay.session.listener.xbox.RelayListenerXboxLogin
 import dev.sora.relay.session.listener.xbox.cache.XboxIdentityTokenCacheFileSystem
+import dev.sora.relay.utils.logError
 import dev.sora.relay.utils.logInfo
 import io.netty.channel.ChannelFactory
 import io.netty.channel.ServerChannel
@@ -58,47 +59,65 @@ object MinecraftRelay {
 
 		// load asynchronously
 		loaderThread = thread {
-			moduleManager.init()
-			registerAdditionalModules(moduleManager)
-			MyApplication.instance.getExternalFilesDir("resource_packs")?.also {
-				if (!it.exists()) it.mkdirs()
-				ModuleResourcePackSpoof.resourcePackProvider = ModuleResourcePackSpoof.FileSystemResourcePackProvider(it)
-			}
-
-			if (Settings.enableCommandManager.getValue(MyApplication.instance)) {
-				// command manager will register listener itself
-				val commandManager = CommandManager(session)
-				commandManager.init(moduleManager)
-				MyApplication.instance.getExternalFilesDir("downloaded_worlds")?.also {
-					commandManager.registerCommand(CommandDownloadWorld(session.eventManager, it))
+			try {
+				moduleManager.init()
+				registerAdditionalModules(moduleManager)
+				MyApplication.instance.getExternalFilesDir("resource_packs")?.also {
+					if (!it.exists()) it.mkdirs()
+					ModuleResourcePackSpoof.resourcePackProvider = ModuleResourcePackSpoof.FileSystemResourcePackProvider(it)
 				}
+
+				if (Settings.enableCommandManager.getValue(MyApplication.instance)) {
+					// command manager will register listener itself
+					val commandManager = CommandManager(session)
+					commandManager.init(moduleManager)
+					MyApplication.instance.getExternalFilesDir("downloaded_worlds")?.also {
+						commandManager.registerCommand(CommandDownloadWorld(session.eventManager, it))
+					}
+				}
+				scriptManager = ScriptManager()
+				scriptFileManager = ScriptManagerFileSystem(
+					externalFilesDir("scripts"),
+					".lua",
+					scriptManager
+				)
+				Handler(Looper.getMainLooper()).post(Runnable {
+					Toast.makeText(
+						MyApplication.instance,
+						"[Script] loading ${scriptFileManager.listScript().size} scripts",
+						Toast.LENGTH_LONG
+					).show()
+				})
+				for (s in scriptFileManager.listScript()) {
+					scriptFileManager.loadScript(s)
+				}
+			} catch (t: Throwable) {
+				// Loading modules/scripts must never take the whole app down nor prevent the
+				// relay from starting, so failures are only logged.
+				logError("load modules", t)
+			} finally {
+				// clean-up
+				loaderThread = null
 			}
-			scriptManager = ScriptManager()
-			scriptFileManager = ScriptManagerFileSystem(
-				MyApplication.instance.getExternalFilesDir("scripts")!!,
-				".lua",
-				scriptManager
-			)
-			Handler(Looper.getMainLooper()).post(Runnable {
-				Toast.makeText(
-					MyApplication.instance,
-					"[Script] loading ${scriptFileManager.listScript().size} scripts",
-					Toast.LENGTH_LONG
-				).show()
-			})
-			for (s in scriptFileManager.listScript()) {
-				scriptFileManager.loadScript(s)
-			}
-			// clean-up
-			loaderThread = null
 		}
 
-        configManager = ConfigManagerFileSystem(MyApplication.instance.getExternalFilesDir("configs")!!, ".json").also {
+        configManager = ConfigManagerFileSystem(externalFilesDir("configs"), ".json").also {
 			it.addSection(ConfigSectionModule(moduleManager))
 			it.addSection(ConfigSectionShortcut(MyApplication.overlayManager))
 			it.addSection(hudManager)
 		}
     }
+
+	/**
+	 * Returns the app specific external directory, falling back to the internal one when the
+	 * external storage is not available (getExternalFilesDir returns null in that case).
+	 */
+	private fun externalFilesDir(name: String): File {
+		val dir = MyApplication.instance.getExternalFilesDir(name)
+			?: File(MyApplication.instance.filesDir, name)
+		if (!dir.exists()) dir.mkdirs()
+		return dir
+	}
 
     private fun registerAdditionalModules(moduleManager: ModuleManager) {
 		moduleManager.registerModule(ModuleESP())
