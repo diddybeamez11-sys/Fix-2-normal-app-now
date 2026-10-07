@@ -1,0 +1,68 @@
+package dev.sora.protohax
+
+import dev.sora.relay.compat.Color
+import io.netty.buffer.Unpooled
+import org.cloudburstmc.protocol.bedrock.codec.v844.Bedrock_v844
+import org.cloudburstmc.protocol.bedrock.data.BuildPlatform
+import org.cloudburstmc.protocol.bedrock.data.skin.ImageData
+import org.cloudburstmc.protocol.bedrock.data.skin.SerializedSkin
+import org.cloudburstmc.protocol.bedrock.packet.PlayerListPacket
+import java.util.UUID
+
+/** TEMPORARY - only injected into builds where java.awt.Color has been relocated (see DiagProbe). */
+internal object DiagProbeAwt {
+
+    fun execute() {
+        DiagProbe.touch(Color::class.java)
+
+        DiagProbe.step("compat Color has java.awt.Color semantics") {
+            val a = Color(0x80102030.toInt(), true)
+            val b = Color(0x102030)
+            val c = Color(16, 32, 48)
+            "argb=" + Integer.toHexString(a.getRGB()) + " alpha=" + a.getAlpha() +
+                " r=" + a.getRed() + " g=" + a.getGreen() + " b=" + a.getBlue() +
+                " | opaque(0x102030)=" + Integer.toHexString(b.getRGB()) +
+                " | equals=" + (b == c) + " hash=" + (b.hashCode() == c.hashCode())
+        }
+
+        DiagProbe.step("PlayerListPacket with skin + colours round trip through the v844 codec") {
+            val codec = Bedrock_v844.CODEC
+            val helper = codec.createHelper()
+            val skin = SerializedSkin.builder()
+                .skinId("probe-skin")
+                .playFabId("")
+                .skinResourcePatch("{\"geometry\":{\"default\":\"geometry.humanoid.custom\"}}")
+                .skinData(ImageData.of(64, 64, ByteArray(64 * 64 * 4)))
+                .capeData(ImageData.EMPTY)
+                .geometryData("")
+                .premium(false)
+                .fullSkinId("probe-skin-full")
+                .color(Color(0xFF336699.toInt(), true))
+                .trusted(true)
+                .build()
+            val entry = PlayerListPacket.Entry(UUID.randomUUID())
+            entry.entityId = 42L
+            entry.name = "probe"
+            entry.xuid = ""
+            entry.platformChatId = ""
+            entry.buildPlatform = BuildPlatform.GOOGLE
+            entry.skin = skin
+            entry.isHost = false
+            entry.isTrustedSkin = true
+            entry.isSubClient = false
+            entry.color = Color(0xFF00AA55.toInt(), true)
+            val pkt = PlayerListPacket()
+            pkt.action = PlayerListPacket.Action.ADD
+            pkt.entries.add(entry)
+
+            val buf = Unpooled.buffer()
+            codec.tryEncode(helper, buf, pkt)
+            val size = buf.readableBytes()
+            val id = codec.getPacketDefinition(PlayerListPacket::class.java).id
+            val back = codec.tryDecode(helper, buf, id) as PlayerListPacket
+            val e = back.entries[0]
+            "id=" + id + " bytes=" + size + " entries=" + back.entries.size + " name=" + e.name +
+                " colour=" + Integer.toHexString(e.color.getRGB()) + " skinColour=" + Integer.toHexString(e.skin.color.getRGB())
+        }
+    }
+}

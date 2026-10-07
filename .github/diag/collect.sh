@@ -53,19 +53,6 @@ fi
 } > "$OUT/30-apk.txt" 2>&1
 $A dex "$APK" "$FW" "$MAPDIR/mapping.txt" > "$OUT/31-dex.txt" 2>&1
 
-BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-mkdir -p "$RUNNER_TEMP/dex" && unzip -o -q "$APK" 'classes*.dex' -d "$RUNNER_TEMP/dex"
-{
-  echo "dexdump: $BT/dexdump  (target descriptor LM2/g;)"
-  for f in "$RUNNER_TEMP"/dex/classes*.dex; do
-    echo "##### $(basename "$f")"
-    "$BT/dexdump" -d "$f" 2>/dev/null | awk -v pat="descriptor  : 'LM2/g;'" '
-      /^Class #/ { if (hit) printf "%s", buf; buf=$0 "\n"; hit=0; next }
-      { buf = buf $0 "\n"; if (index($0, pat) > 0) hit=1 }
-      END { if (hit) printf "%s", buf }'
-  done
-} > "$OUT/32-dex-M2g.txt" 2>&1
-
 # ---- 41: same classes on a plain JVM (no R8, no Android) ------------------------------------------
 STD=$(find "$GCACHE/org.jetbrains.kotlin/kotlin-stdlib" -name 'kotlin-stdlib-1.9.2*.jar' ! -name '*sources*' 2>/dev/null | sort -V | tail -1)
 COR=$(find "$GCACHE/org.jetbrains.kotlinx" -name 'kotlinx-coroutines-core-jvm-1.7.2.jar' 2>/dev/null | head -1)
@@ -75,7 +62,7 @@ COR=$(find "$GCACHE/org.jetbrains.kotlinx" -name 'kotlinx-coroutines-core-jvm-1.
 } > "$OUT/41-jvm-smoke.txt" 2>&1
 
 # ---- 40: what R8 hides behind '-dontwarn **' (plain variant only; this re-runs R8 so it is LAST) ---------
-if [ "$NAME" = "base-plain" ]; then
+if [ "$NAME" = "fixed-plain" ]; then
   cp app/proguard-rules.pro "$RUNNER_TEMP/rules.bak"
   sed -i '/^-dontwarn \*\*[[:space:]]*$/d' app/proguard-rules.pro
   ./gradlew app:minifyReleaseWithR8 --no-daemon --no-configuration-cache --stacktrace > "$OUT/r8-nodontwarn.full.log" 2>&1

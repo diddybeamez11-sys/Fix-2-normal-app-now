@@ -2,6 +2,7 @@ package dev.sora.protohax
 
 import android.os.Build
 import android.util.Log
+import io.netty.buffer.Unpooled
 import dev.sora.protohax.relay.MinecraftRelay as AppRelay
 import dev.sora.relay.game.GameSession
 import dev.sora.relay.game.entity.EntityLocalPlayer
@@ -20,6 +21,10 @@ import org.cloudburstmc.math.vector.Vector3i
 import org.cloudburstmc.protocol.bedrock.codec.compat.BedrockCompat
 import org.cloudburstmc.protocol.bedrock.codec.v2193.Bedrock_v2193
 import org.cloudburstmc.protocol.bedrock.codec.v844.Bedrock_v844
+import org.cloudburstmc.protocol.bedrock.data.biome.BiomeDefinitionData
+import org.cloudburstmc.protocol.bedrock.data.skin.SerializedSkin
+import org.cloudburstmc.protocol.bedrock.packet.MovePlayerPacket
+import org.cloudburstmc.protocol.bedrock.util.EncryptionUtils
 
 /**
  * TEMPORARY startup probe, injected by .github/workflows/diag.yml only (never part of a product build).
@@ -48,7 +53,7 @@ internal object DiagProbe {
         return sb.toString()
     }
 
-    private fun step(name: String, block: () -> Any?) {
+    internal fun step(name: String, block: () -> Any?) {
         val t0 = System.currentTimeMillis()
         try {
             val r = block()
@@ -58,7 +63,7 @@ internal object DiagProbe {
         }
     }
 
-    private fun touch(cls: Class<*>) = step("init " + cls.name) {
+    internal fun touch(cls: Class<*>) = step("init " + cls.name) {
         Class.forName(cls.name, true, cls.classLoader)
         "initialised"
     }
@@ -114,6 +119,50 @@ internal object DiagProbe {
             "modules registered=" + AppRelay.moduleManager.modules.size
         }
         step("AppRelay.announceRelayUp()") { AppRelay.announceRelayUp(); "relay up" }
+
+        // 5. java.awt.Color is absent on Android: protocol classes must use the relocated stand-in
+        step("java.awt.Color exists on this device?") {
+            try {
+                Class.forName("java.awt.Color")
+                "PRESENT"
+            } catch (e: ClassNotFoundException) {
+                "absent (expected on Android)"
+            }
+        }
+        touch(SerializedSkin::class.java)
+        touch(BiomeDefinitionData::class.java)
+
+        // 6. login handshake: jose4j + JCA under R8/ART
+        step("EncryptionUtils key pair + handshake JWT + shared secret + cipher") {
+            val kp = EncryptionUtils.createKeyPair()
+            val token = EncryptionUtils.generateRandomToken()
+            val jwt = EncryptionUtils.createHandshakeJwt(kp, token)
+            val secret = EncryptionUtils.getSecretKey(kp.private, kp.public, token)
+            val cipher = EncryptionUtils.createCipher(true, true, secret)
+            "jwt chars=" + jwt.length + " secret=" + secret.algorithm + " cipher=" + cipher.algorithm
+        }
+
+        // 7. a vector-heavy packet through the real v844 codec (encode, then decode)
+        step("MovePlayerPacket round trip through the v844 codec") {
+            val codec = Bedrock_v844.CODEC
+            val helper = codec.createHelper()
+            val pkt = MovePlayerPacket().apply {
+                runtimeEntityId = 7L
+                position = Vector3f.from(1.5f, 64f, -3.25f)
+                rotation = Vector3f.from(10f, 20f, 30f)
+                mode = MovePlayerPacket.Mode.NORMAL
+                isOnGround = true
+                tick = 99L
+            }
+            val buf = Unpooled.buffer()
+            codec.tryEncode(helper, buf, pkt)
+            val size = buf.readableBytes()
+            val id = codec.getPacketDefinition(MovePlayerPacket::class.java).id
+            val back = codec.tryDecode(helper, buf, id) as MovePlayerPacket
+            "id=" + id + " bytes=" + size + " pos=" + back.position + " rot=" + back.rotation + " tick=" + back.tick
+        }
+
+        // DIAG-AWT-HOOK
 
         Log.i(TAG, "END probe")
     }

@@ -4,6 +4,7 @@ Temporary diagnostic helper (NOT part of the product).
 
 Sub-commands (all print plain text to stdout, never raise to the caller):
   jar      <jar>                         content audit of a (shaded) jar
+  clinit   <jar> [prefix ...]            classes whose <clinit> reaches risky APIs (call graph)
   reflect  <jar>                         reflection / dynamic-loading hot-spots (R8 sensitive code)
   kotlin   <jar> <kotlin-stdlib.jar>     does the jar link against the given Kotlin stdlib?
   mapping  <mapping.txt> [needle ...]    R8 mapping lookups (obfuscated -> original and back)
@@ -21,7 +22,7 @@ import zipfile
 # class-file parsing
 # ----------------------------------------------------------------------------
 
-def parse_class(data):
+def parse_class(data, want_code=False):
     if data[:4] != b"\xca\xfe\xba\xbe":
         raise ValueError("bad magic")
     _minor, major, n = struct.unpack_from(">HHH", data, 4)
@@ -60,7 +61,9 @@ def parse_class(data):
     ifaces = list(struct.unpack_from(">%dH" % ic, data, pos))
     pos += 2 * ic
 
-    def members():
+    codes = {}
+
+    def members(is_method=False):
         nonlocal pos
         (cnt,) = struct.unpack_from(">H", data, pos)
         pos += 2
@@ -69,14 +72,18 @@ def parse_class(data):
             acc, ni, di, ac = struct.unpack_from(">HHHH", data, pos)
             pos += 8
             for _ in range(ac):
+                (an,) = struct.unpack_from(">H", data, pos)
                 pos += 2
                 (ln,) = struct.unpack_from(">I", data, pos)
+                if want_code and is_method and cp[an][1] == "Code":
+                    (cl,) = struct.unpack_from(">I", data, pos + 4 + 4)
+                    codes[(cp[ni][1], cp[di][1])] = data[pos + 4 + 8: pos + 4 + 8 + cl]
                 pos += 4 + ln
             out.append((acc, cp[ni][1], cp[di][1]))
         return out
 
     fields = members()
-    methods = members()
+    methods = members(True)
 
     def cname(idx):
         return cp[cp[idx][1]][1]
@@ -90,6 +97,7 @@ def parse_class(data):
         "ifaces": [cname(x) for x in ifaces],
         "fields": fields,
         "methods": methods,
+        "codes": codes,
     }
 
 
@@ -575,6 +583,142 @@ def cmd_dex(path, android_jar=None, mapping=None):
 
 
 # ----------------------------------------------------------------------------
+# static-initialiser analysis (bytecode level call graph)
+# ----------------------------------------------------------------------------
+
+_LEN2 = {0x10, 0x12, 0xA9, 0xBC} | set(range(0x15, 0x1A)) | set(range(0x36, 0x3B))
+_LEN3 = {0x11, 0x84, 0xC6, 0xC7} | set(range(0x99, 0xA9)) | set(range(0xB2, 0xB9)) | {0xBB, 0xBD, 0xC0, 0xC1, 0x13, 0x14}
+_LEN5 = {0xB9, 0xBA, 0xC8, 0xC9}
+
+
+def scan_code(code):
+    """yield (opcode, cp_index) for every instruction that carries a constant-pool operand."""
+    i, n = 0, len(code)
+    while i < n:
+        op = code[i]
+        if op == 0x12:
+            yield op, code[i + 1]
+            i += 2
+        elif op in (0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xBB, 0xBD, 0xC0, 0xC1, 0x13, 0x14):
+            yield op, (code[i + 1] << 8) | code[i + 2]
+            i += 3
+        elif op in (0xB9, 0xBA):
+            yield op, (code[i + 1] << 8) | code[i + 2]
+            i += 5
+        elif op == 0xAA:
+            base = i + 1 + ((4 - ((i + 1) % 4)) % 4)
+            low = int.from_bytes(code[base + 4:base + 8], "big", signed=True)
+            high = int.from_bytes(code[base + 8:base + 12], "big", signed=True)
+            i = base + 12 + 4 * (high - low + 1)
+        elif op == 0xAB:
+            base = i + 1 + ((4 - ((i + 1) % 4)) % 4)
+            npairs = int.from_bytes(code[base + 4:base + 8], "big")
+            i = base + 8 + 8 * npairs
+        elif op == 0xC4:
+            i += 6 if code[i + 1] == 0x84 else 4
+        elif op == 0xC5:
+            i += 4
+        elif op in _LEN2:
+            i += 2
+        elif op in _LEN3:
+            i += 3
+        elif op in _LEN5:
+            i += 5
+        else:
+            i += 1
+
+
+DANGER = [
+    ("ServiceLoader", lambda o, n: o == "java/util/ServiceLoader" and n == "load"),
+    ("Vector*.from (needs ServiceLoader provider)",
+     lambda o, n: (o.startswith("org/cloudburstmc/math/vector/Vector") and n == "from") or o == "org/cloudburstmc/math/vector/Vectors"),
+    ("Imaginary provider", lambda o, n: o == "org/cloudburstmc/math/imaginary/Imaginary"),
+    ("resource lookup", lambda o, n: n in ("getResourceAsStream", "getResource") and o in ("java/lang/Class", "java/lang/ClassLoader")),
+    ("Class.forName/loadClass", lambda o, n: (o == "java/lang/Class" and n == "forName") or (o == "java/lang/ClassLoader" and n == "loadClass")),
+    ("FieldUpdater by name", lambda o, n: o.startswith("java/util/concurrent/atomic/Atomic") and o.endswith("FieldUpdater") and n == "newUpdater"),
+    ("Unsafe/getDeclaredField", lambda o, n: (o == "sun/misc/Unsafe" and n == "objectFieldOffset") or (o == "java/lang/Class" and n in ("getDeclaredField", "getField"))),
+    ("JCA getInstance", lambda o, n: o in ("java/security/KeyPairGenerator", "java/security/Signature", "java/security/KeyFactory",
+                                          "javax/crypto/Cipher", "java/security/MessageDigest", "javax/crypto/Mac",
+                                          "javax/crypto/KeyAgreement", "java/security/SecureRandom") and n == "getInstance"),
+    ("System.loadLibrary", lambda o, n: o == "java/lang/System" and n in ("loadLibrary", "load")),
+]
+
+
+def cmd_clinit(path, prefixes=None):
+    prefixes = tuple(prefixes) if prefixes else ("dev/sora/", "org/cloudburstmc/", "coelho/")
+    z = zipfile.ZipFile(path)
+    g = {}         # (cls,name,desc) -> list of edges
+    defined = set()
+    supers = {}
+    for n in iter_classes(z):
+        try:
+            ci = parse_class(z.read(n), want_code=True)
+        except Exception:
+            continue
+        cname = ci["this"]
+        defined.add(cname)
+        supers[cname] = ci["super"]
+        cp = ci["cp"]
+        for (nm_desc, code) in ci["codes"].items():
+            edges = []
+            for op, idx in scan_code(code):
+                e = cp[idx] if idx < len(cp) else None
+                if not e:
+                    continue
+                if e[0] in (9, 10, 11):
+                    owner = cp[cp[e[1]][1]][1]
+                    nat = cp[e[2]]
+                    mn, md = cp[nat[1]][1], cp[nat[2]][1]
+                    if op in (0xB2, 0xB3):
+                        edges.append((owner, "<clinit>", "()V"))
+                    elif op in (0xB6, 0xB7, 0xB8, 0xB9):
+                        edges.append((owner, mn, md))
+                elif e[0] == 7 and op == 0xBB:
+                    edges.append((cp[e[1]][1], "<clinit>", "()V"))
+            g[(cname, nm_desc[0], nm_desc[1])] = edges
+
+    def danger(o, n):
+        for label, fn in DANGER:
+            if fn(o, n):
+                return label
+        return None
+
+    results = []
+    for (cname, mn, md) in sorted(g):
+        if mn != "<clinit>" or not cname.startswith(prefixes):
+            continue
+        seen = {(cname, mn, md)}
+        queue = [((cname, mn, md), [cname + ".<clinit>"])]
+        found = {}
+        # a class initialisation first initialises its superclass
+        sup = supers.get(cname)
+        if sup and sup in defined and (sup, "<clinit>", "()V") in g:
+            queue.append(((sup, "<clinit>", "()V"), [cname + " -> super " + sup]))
+        depth_guard = 0
+        while queue and depth_guard < 20000:
+            depth_guard += 1
+            node, path = queue.pop(0)
+            if len(path) > 7:
+                continue
+            for edge in g.get(node, []):
+                lab = danger(edge[0], edge[1])
+                if lab and lab not in found:
+                    found[lab] = path + ["%s.%s" % (edge[0], edge[1])]
+                if edge not in seen and edge in g:
+                    seen.add(edge)
+                    queue.append((edge, path + ["%s.%s" % (edge[0], edge[1])]))
+        if found:
+            results.append((cname, found))
+    print("classes with a static initialiser reaching a risky API (prefixes %s): %d" % (list(prefixes), len(results)))
+    by_label = collections.Counter(l for _c, f in results for l in f)
+    print("by risk:", dict(by_label))
+    for cname, found in results[:260]:
+        print("\n%s" % cname)
+        for lab, path in found.items():
+            print("   [%s]  %s" % (lab, " > ".join(path[-4:])))
+
+
+# ----------------------------------------------------------------------------
 
 def main(argv):
     if len(argv) < 2:
@@ -588,6 +732,8 @@ def main(argv):
             cmd_reflect(*args)
         elif cmd == "kotlin":
             cmd_kotlin(*args)
+        elif cmd == "clinit":
+            cmd_clinit(args[0], args[1:])
         elif cmd == "mapping":
             cmd_mapping(args[0], args[1:])
         elif cmd == "annotate":

@@ -1,4 +1,4 @@
-# TEMPORARY diagnostic workflow (investigation of the "M2.g" NoClassDefFoundError).
+# TEMPORARY diagnostic workflow (investigation of the "M2.g" NoClassDefFoundError; verification of the fix).
 # It is NOT part of the product and is removed again once the root cause is fixed.
 #
 # It builds the project exactly like android.yml (the very same `run:` steps are executed through
@@ -28,15 +28,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # exact reproduction of the user's build (no submodules), no probe: mapping / dex analysis
-          - { name: base-plain, probe: 'false', submodules: 'false' }
-          # same, plus the start-up probe -> runtime evidence on an emulator
-          - { name: base-probe, probe: 'true', submodules: 'false' }
-          # same probe build but with the mcpedata submodule checked out -> shows the NEXT failure layer
-          - { name: mcp-probe, probe: 'true', submodules: 'true' }
-          # candidate fixes for the META-INF/** packaging exclusion (+ submodule)
-          - { name: fix-p0-probe, probe: 'true', submodules: 'true', packaging: p0 }
-          - { name: fix-p1-probe, probe: 'true', submodules: 'true', packaging: p1 }
+          # the fixed tree, no probe: mapping / dex / R8-without-dontwarn analysis
+          - { name: fixed-plain, probe: 'false', awt: relocated }
+          # the fixed tree + start-up probe -> runtime evidence on an emulator
+          - { name: fixed-probe, probe: 'true', awt: relocated }
+          # control: the fixed tree WITHOUT the java.awt.Color relocation -> shows that failure on a real device
+          - { name: awt-before-probe, probe: 'true', awt: removed }
     env:
       GH_TOKEN: ${{ github.token }}
       NAME: ${{ matrix.name }}
@@ -51,7 +48,7 @@ jobs:
           repository: Alextheplayer919/ProtoHax
           ref: 962b96226b09f80ae471d9c6958a0b3002cb3ab1
           path: ProtoHax
-          submodules: ${{ matrix.submodules == 'true' }}
+          submodules: true
 
       - name: Set up JDK 21
         uses: actions/setup-java@v6
@@ -85,34 +82,48 @@ jobs:
             echo "--- packagingOptions ---"; sed -n '/packagingOptions/,/^    }/p' app/build.gradle
           } > "$OUT/01-env.txt" 2>&1
 
-      # Same commands as android.yml: patch OAuth, build the ProtoHax shadow JAR
+      # Same commands as android.yml: OAuth patch, v844/Android patches
+      - name: ProtoHax patches (steps shared with android.yml)
+        run: python3 .github/diag/run_step.py .github/workflows/android.yml build "Patch ProtoHax OAuth" "Build ProtoHax JAR"
+
+      - name: Control experiment - drop the java.awt.Color relocation
+        if: matrix.awt == 'removed'
+        run: |
+          sed -i "/relocate 'java.awt.Color'/d" ProtoHax/build.gradle
+          sed -n '/^shadowJar/,/^}/p' ProtoHax/build.gradle
+
+      # Same commands as android.yml: build the ProtoHax shadow JAR
       - name: ProtoHax build (steps shared with android.yml)
-        run: python3 .github/diag/run_step.py .github/workflows/android.yml build "Patch ProtoHax OAuth" "Prepare ProtoHax JAR"
+        run: python3 .github/diag/run_step.py .github/workflows/android.yml build "Build ProtoHax JAR" "Prepare ProtoHax JAR"
 
       - name: Snapshot ProtoHax JAR before stripping
         run: |
           cp ProtoHax/build/libs/ProtoHax-1.4.0.jar "$RUNNER_TEMP/prestrip.jar"
           ls -l "$RUNNER_TEMP/prestrip.jar"
 
-      # Same commands as android.yml: strip duplicate classes, verify JAR
+      # Same commands as android.yml: strip duplicate classes, verify JAR (incl. verify_jar.py)
       - name: ProtoHax JAR prepare/verify (steps shared with android.yml)
+        if: matrix.awt == 'relocated'
         run: python3 .github/diag/run_step.py .github/workflows/android.yml build "Prepare ProtoHax JAR" "Grant Gradle permission"
 
-      - name: Apply candidate packaging patch
-        if: matrix.packaging != ''
-        run: python3 .github/diag/patch_packaging.py "${{ matrix.packaging }}"
+      - name: ProtoHax JAR prepare - control run, verification skipped on purpose
+        if: matrix.awt == 'removed'
+        run: python3 .github/diag/run_step.py .github/workflows/android.yml build "Prepare ProtoHax JAR" "Verify ProtoHax JAR"
 
       - name: Inject start-up probe
         if: matrix.probe == 'true'
         run: |
           cp .github/diag/DiagProbe.kt.txt app/src/main/java/dev/sora/protohax/DiagProbe.kt
+          if [ "${{ matrix.awt }}" = "relocated" ]; then
+            cp .github/diag/DiagProbeAwt.kt.txt app/src/main/java/dev/sora/protohax/DiagProbeAwt.kt
+            sed -i 's#// DIAG-AWT-HOOK#DiagProbeAwt.execute()#' app/src/main/java/dev/sora/protohax/DiagProbe.kt
+          fi
           python3 - <<'PY'
           p = 'app/src/main/java/dev/sora/protohax/MyApplication.kt'
           s = open(p).read()
           assert 'instance = this' in s
           s = s.replace('instance = this', 'instance = this\n        DiagProbe.start()', 1)
           open(p, 'w').write(s)
-          print(s)
           PY
 
       - name: Build release APK
@@ -127,7 +138,7 @@ jobs:
         run: tail -150 "$OUT/gradle-build.log" > "$OUT/05-gradle-tail.txt"
 
       - name: Dependency report
-        if: matrix.name == 'base-plain'
+        if: matrix.name == 'fixed-plain'
         continue-on-error: true
         run: ./gradlew app:dependencies --configuration releaseRuntimeClasspath --no-daemon --no-configuration-cache -q > "$OUT/14-deps.txt" 2>&1
 
@@ -167,7 +178,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        name: [base-probe, mcp-probe, fix-p0-probe, fix-p1-probe]
+        name: [fixed-probe, awt-before-probe]
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
