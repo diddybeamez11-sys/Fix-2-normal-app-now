@@ -191,6 +191,34 @@ def pick_target():
     log("target application: %s uid=%d" % (TARGET, TARGET_UID))
 
 
+def summarize_pcap(path):
+    names = {0x01: "UnconnectedPing", 0x02: "UnconnectedPingOpen", 0x05: "OpenConnReq1", 0x06: "OpenConnReply1",
+             0x07: "OpenConnReq2", 0x08: "OpenConnReply2", 0x19: "IncompatibleProtocol", 0x1c: "UnconnectedPong"}
+    try:
+        from scapy.all import rdpcap, UDP, IP
+        pk = rdpcap(path)
+    except Exception as e:  # noqa
+        return "pcap summary failed: %r" % e
+    lines, t0 = [], None
+    for p in pk:
+        if not (p.haslayer(UDP) and p.haslayer(IP)):
+            continue
+        t0 = t0 or float(p.time)
+        data = bytes(p[UDP].payload)
+        first = data[0] if data else -1
+        what = names.get(first, "datagram(0x%02x)" % first if first >= 0 else "empty")
+        extra = ""
+        if first == 0x05 and len(data) > 17:
+            extra = " protocol=%d" % data[17]
+        lines.append("%7.3f %s:%d -> %s:%d len=%d %s%s" % (float(p.time) - t0, p[IP].src, p[UDP].sport, p[IP].dst, p[UDP].dport, len(data), what, extra))
+    return "\n".join(lines[:150]) + ("\n... (%d packets)" % len(lines) if len(lines) > 150 else "\n(%d packets)" % len(lines))
+
+
+def run_client(who, target, timeout=150):
+    cmd = "/data/local/tmp/rakclient %s" % target if who is None else "su %s /data/local/tmp/rakclient %s" % (who, target)
+    return sh(cmd, timeout=timeout)
+
+
 def relay_test():
     """a RakNet/Bedrock client under the target app's uid talks to a stub backend on the CI host THROUGH the VPN,
     the netstack and the Java relay: RequestNetworkSettings(844) -> relay (codec selection) -> backend -> NetworkSettings"""
@@ -199,36 +227,76 @@ def relay_test():
     if not (os.path.exists(server_bin) and os.path.exists(client_bin)):
         log("relay test skipped: tools not built")
         return
-    srv_path = os.path.join(OUT, "20-rak-backend-server.txt")
-    srv_log = open(srv_path, "w")
-    srv = subprocess.Popen([server_bin, "0.0.0.0:19132"], stdout=srv_log, stderr=subprocess.STDOUT)
-    time.sleep(2)
+    logs = {}
+    procs = []
+    for port, mode in ((19132, "cookies"), (19133, "nocookies")):
+        path = os.path.join(OUT, "2%d-rak-backend-%d.txt" % (0 if port == 19132 else 1, port))
+        f = open(path, "w")
+        procs.append((subprocess.Popen([server_bin, "0.0.0.0:%d" % port, mode], stdout=f, stderr=subprocess.STDOUT), f))
+        logs[port] = path
+    subprocess.run("sudo apt-get install -y -qq tcpdump >/dev/null 2>&1", shell=True)
+    pcap = "/tmp/rak.pcap"
+    cap = subprocess.Popen(["sudo", "tcpdump", "-i", "any", "-nn", "-s", "0", "-U", "-w", pcap, "udp port 19132 or udp port 19133"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(3)
     adb("push", client_bin, "/data/local/tmp/rakclient")
     sh("chmod 755 /data/local/tmp/rakclient")
-    out = ""
-    for who in ("%d,%d,3003" % (TARGET_UID, TARGET_UID), str(TARGET_UID)):
-        out = sh("su %s /data/local/tmp/rakclient 10.0.2.2:19132" % who, timeout=150)
-        log("client (su %s):\n%s" % (who, out.strip()))
-        if "CLIENT" in out:
-            break
-    time.sleep(3)
-    srv.terminate()
-    srv_log.close()
-    server_out = open(srv_path).read()
-    log("backend log:\n%s" % server_out.strip())
-    open(os.path.join(OUT, "21-rak-client-output.txt"), "w").write(out)
 
-    check("relay test: the client completed the RakNet handshake through VPN -> netstack -> relay", "CLIENT CONNECTED" in out,
-          out.strip()[:140].replace("\n", " | "))
+    def got_settings(out):
+        m = re.search(r"CLIENT GOT \d+ bytes: ([0-9a-f]+)", out)
+        return bool(m) and "8f01" in m.group(1)
+
+    # control: no VPN involved (root is not tunnelled) - proves the emulator -> host path and the stub backend
+    ctl = {}
+    for port in (19132, 19133):
+        ctl[port] = run_client(None, "10.0.2.2:%d" % port, 90)
+        log("CONTROL (direct, port %d):\n%s" % (port, ctl[port].strip()))
+    check("control: a direct client reaches the stub backend over the emulator network (port 19132)", got_settings(ctl[19132]),
+          ctl[19132].strip()[-100:].replace("\n", " | "))
+    check("control: a direct client reaches the stub backend with cookies disabled (port 19133)", got_settings(ctl[19133]),
+          ctl[19133].strip()[-100:].replace("\n", " | "))
+
+    def count_req(path):
+        return open(path).read().count("RequestNetworkSettings protocol=844")
+
+    base = {port: count_req(logs[port]) for port in (19132, 19133)}
+
+    # through VPN -> netstack -> Java relay -> stub backend
+    outs = {}
+    for port in (19132, 19133):
+        for who in ("%d,%d,3003" % (TARGET_UID, TARGET_UID), str(TARGET_UID)):
+            out = run_client(who, "10.0.2.2:%d" % port)
+            log("RELAY run (su %s, port %d):\n%s" % (who, port, out.strip()))
+            outs[port] = out
+            if "CLIENT" in out:
+                break
+        time.sleep(2)
+    time.sleep(3)
+    cap.terminate()
+    subprocess.run("sudo pkill tcpdump", shell=True)
+    for pr, f in procs:
+        pr.terminate()
+        f.close()
+    open(os.path.join(OUT, "22-host-udp-capture.txt"), "w").write(summarize_pcap(pcap))
+    server_out = {port: open(path).read() for port, path in logs.items()}
+    for port, txt in server_out.items():
+        log("backend log (port %d):\n%s" % (port, txt.strip()[-1500:]))
+    open(os.path.join(OUT, "23-rak-client-output.txt"), "w").write(
+        "\n".join("== relay run, port %d ==\n%s" % (p, o) for p, o in outs.items()))
+
+    for port in (19132, 19133):
+        out = outs.get(port, "")
+        check("relay test (port %d): the client completed the RakNet handshake through VPN -> netstack -> relay" % port,
+              "CLIENT CONNECTED" in out, out.strip()[:100].replace("\n", " | "))
+        forwarded = count_req(logs[port]) - base[port]
+        check("relay test (port %d): the backend received RequestNetworkSettings(844) forwarded by the relay" % port,
+              forwarded >= 1, "%d forwarded request(s)" % forwarded)
+        check("relay test (port %d): the client received NetworkSettings through the relay" % port, got_settings(out))
     sess = logcat_lines(r"SessionCreation")
     check("relay log: SessionCreation (the Java relay accepted the connection)", bool(sess), str([l[-70:] for l in sess][:2]))
     codec = logcat_lines(r"selected codec")
     check("relay log: Bedrock_v844 selected for a protocol-844 client",
           any("clientProtocol=844" in l and "protocol=844" in l and "mc=1.21.111" in l for l in codec), str([l[-90:] for l in codec][:2]))
-    check("the backend received RequestNetworkSettings with protocol 844 (forwarded by the relay)",
-          "RequestNetworkSettings protocol=844" in server_out)
-    got = re.search(r"CLIENT GOT \d+ bytes: ([0-9a-f]+)", out)
-    check("the client received the backend's NetworkSettings through the relay", bool(got) and "8f01" in got.group(1), got.group(1)[:60] if got else "no reply")
     check("no crash during the relay test", not logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG)))
 
 

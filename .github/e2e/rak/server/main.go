@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"time"
@@ -17,7 +18,15 @@ func main() {
 	if len(os.Args) > 1 {
 		addr = os.Args[1]
 	}
-	l, err := raknet.Listen(addr)
+	conf := raknet.ListenConfig{
+		ErrorLog:      slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		BlockDuration: -1, // never block an address after an error: we want to see every attempt
+	}
+	if len(os.Args) > 2 && os.Args[2] == "nocookies" {
+		conf.DisableCookies = true
+		fmt.Println("SERVER cookies disabled")
+	}
+	l, err := conf.Listen(addr)
 	if err != nil {
 		fmt.Println("LISTEN ERROR:", err)
 		os.Exit(1)
