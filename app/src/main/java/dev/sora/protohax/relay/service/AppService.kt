@@ -9,6 +9,8 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.ConnectivityManager
 import android.net.VpnService
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
@@ -26,6 +28,7 @@ import libmitm.TUN
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.NetworkInterface
+import kotlin.concurrent.thread
 
 
 class AppService : VpnService() {
@@ -160,13 +163,21 @@ class AppService : VpnService() {
             }
         }
 
-        try {
-            MinecraftRelay.announceRelayUp()
-        } catch (t: Throwable) {
-            logError("start relay", t)
-            // the overlay is up but no packets will be processed, so say so instead of leaving
-            // the user wondering why the cheats do nothing
-            toast(getString(R.string.relay_start_failed, t.message ?: t.javaClass.simpleName))
+        // announceRelayUp() blocks on MinecraftRelay.loaderThread.join() while every module and
+        // Lua script is loaded. Doing that here would block the main thread immediately after the
+        // overlay windows were added, starving the Compose recomposer (AndroidUiDispatcher.Main)
+        // that is what actually makes the in-game menu interactive. So start it off-thread.
+        thread(name = "relay-start") {
+            try {
+                MinecraftRelay.announceRelayUp()
+            } catch (t: Throwable) {
+                logError("start relay", t)
+                // the overlay is up but no packets will be processed, so say so instead of leaving
+                // the user wondering why the cheats do nothing
+                Handler(Looper.getMainLooper()).post {
+                    toast(getString(R.string.relay_start_failed, t.message ?: t.javaClass.simpleName))
+                }
+            }
         }
     }
 
