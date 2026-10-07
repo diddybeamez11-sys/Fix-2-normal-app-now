@@ -28,7 +28,17 @@ usage: apply_android_patches.py <ProtoHax checkout> <pmmp/BedrockData checkout>
    and such servers silently ignore OpenConnectionRequest2 of a positive GUID ("invalid ClientGUID ... expected
    negative"), so about every second connection attempt ends in a connect timeout. The sign bit is set.
 
-4. Registry data for protocol 844
+4. Inbound frame codec (the relay could not decode a single packet)
+   ProtoHax replaces Cloudburst's FrameIdCodec with its own CustomFrameIdCodec (to add RakNet reliability).
+   Cloudburst's pipeline is FrameIdCodec -> CompressionCodec -> BedrockBatchDecoder -> BedrockPacketCodec and,
+   since the BedrockBatchWrapper refactoring, FrameIdCodec.decode emits a BedrockBatchWrapper and
+   CompressionCodec only accepts that. CustomFrameIdCodec.decode still emitted a raw ByteBuf (the encode side
+   had been adapted when ProtoHax was moved to the Beta13 snapshot, the decode side had not), so the very first
+   packet of every connection - in both directions - failed with
+   "ClassCastException: UnpooledSlicedByteBuf cannot be cast to BedrockBatchWrapper" in CompressionCodec.
+   decode now wraps the payload exactly like Cloudburst's own FrameIdCodec.
+
+5. Registry data for protocol 844
    ProtoHax resolves block / item definitions with MappingProvider.craftMapping(protocol), which takes the
    newest data set <= the protocol. The data of its `mcpedata` submodule ends at protocol 594 (Minecraft
    1.20.10), so a 1.21.111 session would silently use 1.20.10 block palettes. The same data is published
@@ -95,7 +105,12 @@ patch(src + "MinecraftRelay.kt",
       "\t\t\t\t// the vanilla client's RakNet GUID is always negative (servers built on go-raknet reject positive ones)\n"
       "\t\t\t\t.option(RakChannelOption.RAK_GUID, Random.nextLong() or Long.MIN_VALUE)")
 
-# --- 4. registry data for protocol 844 ------------------------------------------------------------------
+# --- 4. inbound frame codec: emit the BedrockBatchWrapper the next pipeline stage requires -------------------
+patch(src + "session/CustomFrameIdCodec.kt",
+      "out.add(content.readRetainedSlice(content.readableBytes()))",
+      "out.add(BedrockBatchWrapper.newInstance(content.readRetainedSlice(content.readableBytes()), null))")
+
+# --- 5. registry data for protocol 844 ------------------------------------------------------------------
 info = json.loads((bedrock_data / "protocol_info.json").read_text())["version"]
 version = "%d.%d.%d" % (info["major"], info["minor"], info["patch"])
 if info["protocol_version"] != TARGET_PROTOCOL or version != TARGET_VERSION or info["beta"]:

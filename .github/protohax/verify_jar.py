@@ -13,6 +13,8 @@ into the APK). Every check below corresponds to a real failure that happened or 
   * no class may still reference java.awt.Color (Android has no java.awt).
   * the relay's RakNet client GUID must be negative like the vanilla client's (go-raknet based servers - Dragonfly
     and many community servers - silently ignore positive ones, so about every second connect would time out).
+  * the relay's inbound frame codec must create the BedrockBatchWrapper Cloudburst's CompressionCodec requires
+    (otherwise every inbound packet of every connection fails with a ClassCastException).
   * the Microsoft OAuth fix (authorization_code on first login, refresh_token afterwards) must be in the jar.
 
 usage: verify_jar.py <ProtoHax jar>
@@ -75,6 +77,11 @@ if b"1.21.111" not in session or b"1.26.50" in session:
 initializer = raw("dev/sora/relay/MinecraftRelay$BedrockRelayInitializer.class")
 if b"\x05\x80\x00\x00\x00\x00\x00\x00\x00" not in initializer:
     problems.append("the relay's RakNet client GUID is not forced negative (go-raknet servers reject positive GUIDs)")
+
+# 2c. the inbound frame codec must emit a BedrockBatchWrapper (Cloudburst's CompressionCodec rejects a raw ByteBuf)
+frame_codec = raw("dev/sora/relay/session/CustomFrameIdCodec.class")
+if b"newInstance" not in frame_codec:
+    problems.append("CustomFrameIdCodec.decode does not create a BedrockBatchWrapper (every inbound packet would fail)")
 
 # 3. java.awt.Color must be gone, its replacement present
 if "dev/sora/relay/compat/Color.class" not in names:
