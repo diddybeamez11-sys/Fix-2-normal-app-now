@@ -81,10 +81,12 @@ import dev.sora.relay.cheat.module.CheatModule
 import dev.sora.relay.cheat.module.EventModuleToggle
 import dev.sora.relay.game.event.EventHook
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ConfigureMenu(private val overlayManager: OverlayManager) {
 
@@ -126,11 +128,18 @@ class ConfigureMenu(private val overlayManager: OverlayManager) {
 	@OptIn(ExperimentalCoroutinesApi::class, ExperimentalAnimationApi::class)
 	@SuppressLint("ClickableViewAccessibility")
 	fun display(wm: WindowManager, ctx: Context) {
+		// This window covers the whole screen and is added *after* the floating entrance icon, so
+		// it sits on top of it. It must not be focusable/touchable/touch-modal until the
+		// composition made it visible: with flags = 0 an invisible full-screen window swallows
+		// every tap - including the tap on the entrance icon that is supposed to open the menu -
+		// until the recomposer (which runs on the main thread) gets a chance to correct them.
 		val params = WindowManager.LayoutParams(
 			WindowManager.LayoutParams.MATCH_PARENT,
 			WindowManager.LayoutParams.MATCH_PARENT,
 			WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-			0,
+			WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+				WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+				WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
 			PixelFormat.TRANSLUCENT
 		)
 		params.dimAmount = 0.5f
@@ -204,8 +213,14 @@ class ConfigureMenu(private val overlayManager: OverlayManager) {
 			firstRun = false
 		}
 
-		wm.addView(composeView, params)
+		// start out hidden and inert; displayState() flips both once the composition runs
+		composeView.isInvisible = true
+		// assign before addView: the attach is what kicks the composition off and displayState()
+		// resolves the window through menuLayout, so assigning afterwards races with it and can
+		// drop the very first visibility update
 		menuLayout = composeView
+
+		wm.addView(composeView, params)
 	}
 
 	fun destroy(wm: WindowManager) {
@@ -314,6 +329,14 @@ class ConfigureMenu(private val overlayManager: OverlayManager) {
 		val stateMap = remember { mutableStateMapOf<CheatModule, Boolean>() }
 
 		LaunchedEffect(Unit) {
+			// MinecraftRelay registers every module (and Lua script) on its loader thread into a plain
+			// ArrayList. The snapshot below is taken only once, so reading the list while the loader is still
+			// filling it races with it (ConcurrentModificationException, or a menu that permanently lacks modules).
+			// Wait for the loader first - off the UI thread, so the menu stays responsive.
+			withContext(Dispatchers.IO) {
+				MinecraftRelay.loaderThread?.join()
+			}
+
 			callbackFlow {
 				val listener = EventHook(EventModuleToggle::class.java, handler = {
 					trySend(this)
