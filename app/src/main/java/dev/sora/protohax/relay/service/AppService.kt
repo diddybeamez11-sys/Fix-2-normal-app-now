@@ -79,7 +79,7 @@ class AppService : VpnService() {
             if (ACTION_START == action) {
                 // Never leave a foreground service (and its notification) running when the VPN
                 // could not be started; the user has to know why nothing happened.
-                toast(getString(R.string.vpn_start_failed, t.message ?: t.javaClass.simpleName))
+                toast(getString(R.string.vpn_start_failed, t.rootCauseMessage()))
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -157,7 +157,7 @@ class AppService : VpnService() {
             toast(R.string.overlay_hint)
         } catch (t: Throwable) {
             logError("start overlay", t)
-            toast(getString(R.string.overlay_start_failed, t.message ?: t.javaClass.simpleName))
+            toast(getString(R.string.overlay_start_failed, t.rootCauseMessage()))
             if (!android.provider.Settings.canDrawOverlays(this)) {
                 toast(R.string.request_overlay)
             }
@@ -175,7 +175,7 @@ class AppService : VpnService() {
                 // the overlay is up but no packets will be processed, so say so instead of leaving
                 // the user wondering why the cheats do nothing
                 Handler(Looper.getMainLooper()).post {
-                    toast(getString(R.string.relay_start_failed, t.message ?: t.javaClass.simpleName))
+                    toast(getString(R.string.relay_start_failed, t.rootCauseMessage()))
                 }
             }
         }
@@ -266,6 +266,21 @@ class AppService : VpnService() {
 			.addAction(R.drawable.notification_icon, getString(R.string.dashboard_fab_disconnect), pendingIntent1)
 
         return builder.build()
+    }
+
+    /**
+     * What to tell the user about a failure. A failed static initialiser is reported as
+     * "NoClassDefFoundError: <class name>" - and after R8 that name is obfuscated ("M2.g") and says nothing.
+     * The innermost cause names what actually went wrong.
+     */
+    private fun Throwable.rootCauseMessage(): String {
+        var root: Throwable = this
+        while (true) {
+            val next = root.cause
+            if (next == null || next === root) break
+            root = next
+        }
+        return root.message?.takeIf { it.isNotBlank() } ?: root.javaClass.simpleName
     }
 
     companion object {

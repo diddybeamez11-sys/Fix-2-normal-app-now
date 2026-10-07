@@ -81,10 +81,12 @@ import dev.sora.relay.cheat.module.CheatModule
 import dev.sora.relay.cheat.module.EventModuleToggle
 import dev.sora.relay.game.event.EventHook
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ConfigureMenu(private val overlayManager: OverlayManager) {
 
@@ -327,6 +329,14 @@ class ConfigureMenu(private val overlayManager: OverlayManager) {
 		val stateMap = remember { mutableStateMapOf<CheatModule, Boolean>() }
 
 		LaunchedEffect(Unit) {
+			// MinecraftRelay registers every module (and Lua script) on its loader thread into a plain
+			// ArrayList. The snapshot below is taken only once, so reading the list while the loader is still
+			// filling it races with it (ConcurrentModificationException, or a menu that permanently lacks modules).
+			// Wait for the loader first - off the UI thread, so the menu stays responsive.
+			withContext(Dispatchers.IO) {
+				MinecraftRelay.loaderThread?.join()
+			}
+
 			callbackFlow {
 				val listener = EventHook(EventModuleToggle::class.java, handler = {
 					trySend(this)
