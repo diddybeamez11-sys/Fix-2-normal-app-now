@@ -162,6 +162,15 @@ internal object DiagProbe {
             "id=" + id + " bytes=" + size + " pos=" + back.position + " rot=" + back.rotation + " tick=" + back.tick
         }
 
+        // 8. registry data of protocol 844 (generated from pmmp/BedrockData) - must be picked over the 594 data
+        step("BlockMapping.Provider.craftMapping(844): protocol / airId") {
+            val m = BlockMapping.Provider.craftMapping(844)
+            "protocol=" + m.protocol + " airId=" + m.airId
+        }
+        step("ItemMapping runtime id of minecraft:acacia_boat (594 data: 381, 844 data: 405)") {
+            ItemMapping.Provider.craftMapping(844).getRuntime("minecraft:acacia_boat")
+        }
+
         // DIAG-AWT-HOOK
 
         Log.i(TAG, "END probe")

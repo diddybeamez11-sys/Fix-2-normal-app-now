@@ -50,6 +50,13 @@ jobs:
           path: ProtoHax
           submodules: true
 
+      - name: Checkout Bedrock 1.21.111 protocol data
+        uses: actions/checkout@v7
+        with:
+          repository: pmmp/BedrockData
+          ref: 7484fe3c3d7949fd48cc520add4f7eeebc4ba4af
+          path: BedrockData
+
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
@@ -86,15 +93,14 @@ jobs:
       - name: ProtoHax patches (steps shared with android.yml)
         run: python3 .github/diag/run_step.py .github/workflows/android.yml build "Patch ProtoHax OAuth" "Build ProtoHax JAR"
 
-      - name: Control experiment - drop the java.awt.Color relocation
-        if: matrix.awt == 'removed'
-        run: |
-          sed -i "/relocate 'java.awt.Color'/d" ProtoHax/build.gradle
-          sed -n '/^shadowJar/,/^}/p' ProtoHax/build.gradle
-
-      # Same commands as android.yml: build the ProtoHax shadow JAR
-      - name: ProtoHax build (steps shared with android.yml)
+      # Same commands as android.yml: build the ProtoHax shadow JAR and relocate java.awt.Color
+      - name: ProtoHax build + relocation (steps shared with android.yml)
+        if: matrix.awt == 'relocated'
         run: python3 .github/diag/run_step.py .github/workflows/android.yml build "Build ProtoHax JAR" "Prepare ProtoHax JAR"
+
+      - name: ProtoHax build - control run, java.awt.Color relocation skipped on purpose
+        if: matrix.awt == 'removed'
+        run: python3 .github/diag/run_step.py .github/workflows/android.yml build "Build ProtoHax JAR" "Relocate java.awt.Color"
 
       - name: Snapshot ProtoHax JAR before stripping
         run: |
