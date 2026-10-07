@@ -682,3 +682,31 @@ jobs:
           fi
 
           fail
+
+  # ---------------------------------------------------------
+  # The committed app/libs/ProtoHax-1.4.0.jar is the library a local build
+  # (./gradlew app:assembleRelease) packages, so it is verified on every run
+  # as well: this job fails if the committed jar is stale or incomplete, even
+  # when the rebuild / publish flow of the job above is skipped.
+  #
+  # A red result here means the committed jar is out of date: push a commit
+  # whose message contains [publish-jar] (or dispatch the workflow with
+  # publish_jar = true) to rebuild and publish it.
+  # ---------------------------------------------------------
+  verify-committed-jar:
+    name: Verify the committed ProtoHax jar (what local builds use)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Android project
+        uses: actions/checkout@v7
+
+      - name: Verify the committed jar
+        run: |
+          set -e
+
+          echo "Committed jar:"
+          ls -l app/libs/ProtoHax-1.4.0.jar
+
+          echo
+          echo "Checking registry assets, v844 configuration and java.awt.Color relocation..."
+          python3 .github/protohax/verify_jar.py app/libs/ProtoHax-1.4.0.jar
