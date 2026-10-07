@@ -59,26 +59,59 @@ class AppService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent ?: return START_NOT_STICKY
 
-        val action = intent.action
-        try {
-            if (ACTION_START == action) {
+        if (ACTION_START == intent.action) {
+            try {
                 // Promote the service immediately. Starting the VPN/TUN can take long enough
                 // that Android may otherwise kill the service before it enters foreground.
                 startForeground(1, createNotification())
+            } catch (t: Throwable) {
+                logError("startForeground", t)
+                toastStartFailure(t)
+                stopSelf()
+                return super.onStartCommand(intent, flags, startId)
+            }
+
+            try {
                 startVPN()
-            } else {
+            } catch (t: Throwable) {
+                // This used to be swallowed by a single catch-all around the whole command,
+                // which looked exactly like "the GUI does not load": the tunnel never came up,
+                // the overlay listeners were never notified and the foreground service stayed
+                // around pretending everything was fine. Report it and tear down instead.
+                logError("command", t)
+                toastStartFailure(t)
                 stopVPN()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
-        } catch (t: Throwable) {
-            logError("command", t)
+        } else {
+            try {
+                stopVPN()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            } catch (t: Throwable) {
+                logError("command", t)
+            }
         }
         return super.onStartCommand(intent, flags, startId)
     }
 
+    private fun toastStartFailure(t: Throwable) {
+        try {
+            toast(getString(R.string.vpn_start_failed, t.message ?: t.javaClass.simpleName))
+        } catch (ignored: Throwable) {
+            logError("toast", ignored)
+        }
+    }
+
     private fun startVPN() {
-		toast("Language selected ${Settings.languages.getValue(this).displayName}")
+        val targetPackage = MainActivity.targetPackage
+        if (targetPackage.isEmpty()) {
+            // addAllowedApplication("") throws, which used to abort the start silently.
+            // The caller turns this into a single user visible message.
+            throw IllegalStateException("no target application selected")
+        }
+
         val (hasIPv4, hasIPv6) = when(Settings.ipv6Status.getValue(this)) {
 			Settings.IPv6Choices.AUTOMATIC -> checkNetState()
 			Settings.IPv6Choices.ENABLED -> true to true
@@ -90,7 +123,7 @@ class AppService : VpnService() {
         builder.setBlocking(true)
         builder.setMtu(VPN_MTU)
         builder.setSession("ProtoHax")
-        builder.addAllowedApplication(MainActivity.targetPackage)
+        builder.addAllowedApplication(targetPackage)
         builder.addDnsServer("8.8.8.8")
         // ipv4
         if (hasIPv4) {
@@ -103,7 +136,8 @@ class AppService : VpnService() {
             builder.addRoute("::", 0)
         }
 
-        val vpnDescriptor = builder.establish() ?: return
+        val vpnDescriptor = builder.establish()
+            ?: throw IllegalStateException("VpnService.Builder.establish() returned null")
         this.vpnDescriptor = vpnDescriptor
 
         val tun = TUN().apply {
@@ -120,11 +154,25 @@ class AppService : VpnService() {
         tun.start()
         logInfo("netstack started")
         isActive = true
+
+        // Bring the in-game overlay up first and keep it isolated from the relay. Both steps
+        // used to share one try block, so any relay failure (port already bound, loader thread
+        // interrupted, ...) silently suppressed the GUI - and vice versa.
         try {
-			MinecraftRelay.announceRelayUp()
             serviceListeners.forEach { it.onServiceStarted() }
         } catch (t: Throwable) {
             logError("start callback", t)
+        }
+
+        try {
+            MinecraftRelay.announceRelayUp()
+        } catch (t: Throwable) {
+            logError("relay start", t)
+            try {
+                toast(getString(R.string.relay_start_failed, t.message ?: t.javaClass.simpleName))
+            } catch (ignored: Throwable) {
+                logError("toast", ignored)
+            }
         }
     }
 
@@ -142,28 +190,53 @@ class AppService : VpnService() {
     }
 
     private fun checkNetState(): Pair<Boolean, Boolean> {
-		val connectivityManager = this.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
-		val activeNetwork = connectivityManager.getLinkProperties(connectivityManager.activeNetwork ?: return true to false) ?: return true to false
-		val interfaceName = activeNetwork.interfaceName
+        // Detection needs ACCESS_NETWORK_STATE and touches system APIs that can throw.
+        // It must never abort the VPN start: falling back to IPv4-only keeps the tunnel
+        // (and therefore the in-game overlay GUI) working.
+        return try {
+            val connectivityManager = this.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val activeNetwork = connectivityManager.activeNetwork ?: return true to false
+            val interfaceName = connectivityManager.getLinkProperties(activeNetwork)?.interfaceName
+                ?: return true to false
 
-		val networkInterfaces = NetworkInterface.getNetworkInterfaces()
-		while (networkInterfaces.hasMoreElements()) {
-			val ni = networkInterfaces.nextElement()
-			if (ni.name != interfaceName) continue
+            val networkInterfaces = NetworkInterface.getNetworkInterfaces()
+            while (networkInterfaces.hasMoreElements()) {
+                val ni = networkInterfaces.nextElement()
+                if (ni.name != interfaceName) continue
 
-			var hasIPv4 = false
-			var hasIPv6 = false
-			for (addr in ni.interfaceAddresses) {
-				if (addr.address is Inet6Address) {
-					hasIPv6 = true
-				} else if (addr.address is Inet4Address) {
-					hasIPv4 = true
-				}
-			}
-			return hasIPv4 to hasIPv6
-		}
+                var hasIPv4 = false
+                var hasIPv6 = false
+                for (addr in ni.interfaceAddresses) {
+                    if (addr.address is Inet6Address) {
+                        hasIPv6 = true
+                    } else if (addr.address is Inet4Address) {
+                        hasIPv4 = true
+                    }
+                }
+                // an interface reporting no usable address must not disable both stacks
+                return if (hasIPv4 || hasIPv6) hasIPv4 to hasIPv6 else true to false
+            }
 
-		return true to false
+            true to false
+        } catch (t: Throwable) {
+            logError("checkNetState", t)
+            true to false
+        }
+    }
+
+    /**
+     * The selected application may have been uninstalled, in which case resolving its label
+     * throws. That used to take the whole foreground notification - and with it the VPN start
+     * and the in-game GUI - down.
+     */
+    private fun targetAppName(): String {
+        val targetPackage = MainActivity.targetPackage
+        return try {
+            packageManager.getApplicationName(targetPackage)
+        } catch (t: Throwable) {
+            logError("resolve target app name", t)
+            targetPackage
+        }
     }
 
     private fun createNotification(): Notification {
@@ -181,7 +254,7 @@ class AppService : VpnService() {
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(getString(
-                R.string.proxy_notification, getString(R.string.app_name), packageManager.getApplicationName(MainActivity.targetPackage)))
+                R.string.proxy_notification, getString(R.string.app_name), targetAppName()))
             .setSmallIcon(R.drawable.notification_icon)
             .setLargeIcon(BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher))
             .setOngoing(true)

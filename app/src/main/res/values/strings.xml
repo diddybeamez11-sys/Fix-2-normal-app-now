@@ -6,6 +6,8 @@
     <string name="mitm_disconnected">Disconnected from MITM proxy</string>
     <string name="request_overlay">We need overlay permission in order to display GUIs that you can interact in game</string>
     <string name="proxy_notification">%1$s is processing packets for %2$s</string>
+    <string name="vpn_start_failed">Failed to start the proxy: %1$s</string>
+    <string name="relay_start_failed">The in-game GUI is up, but the proxy failed to start: %1$s</string>
 
     <string name="dashboard_more">More</string>
     <string name="dashboard_about">About</string>

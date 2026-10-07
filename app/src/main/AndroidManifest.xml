@@ -3,6 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Required by ConnectivityManager#getActiveNetwork/getLinkProperties, which AppService
+         uses to auto-detect the IPv4/IPv6 capabilities of the active network. Without it those
+         calls throw a SecurityException, startVPN() aborts and the in-game overlay GUI never
+         gets created. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"

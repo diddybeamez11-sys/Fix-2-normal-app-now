@@ -16,14 +16,17 @@ import dev.sora.protohax.relay.MinecraftRelay
 import dev.sora.protohax.relay.service.ServiceListener
 import dev.sora.protohax.ui.overlay.menu.ConfigureMenu
 import dev.sora.relay.cheat.module.CheatModule
+import dev.sora.relay.utils.logError
 import kotlin.math.abs
 
 class OverlayManager : ServiceListener {
 
 	var currentContext: Context? = null
 
+	// the service context is only set while AppService is alive; falling back to the application
+	// context keeps building the overlay possible instead of throwing a NullPointerException
 	val ctx: Context
-		get() = currentContext!!
+		get() = currentContext ?: MyApplication.instance
 
 	private var entranceView: View? = null
 	var renderLayerView: RenderLayerView? = null
@@ -48,18 +51,20 @@ class OverlayManager : ServiceListener {
 
 		val imageView = ImageView(ctx)
 
-		ResourcesCompat.getDrawable(
-			ctx.resources, R.mipmap.ic_launcher, ctx.theme
-		)?.let { drawable ->
-			val bitmap = Bitmap.createBitmap(
-				(drawable.intrinsicWidth * 0.7).toInt(), (drawable.intrinsicHeight * 0.7).toInt(),
-				Bitmap.Config.ARGB_8888
-			)
+		// a drawable without an intrinsic size reports -1, which used to produce a zero/negative
+		// sized bitmap and throw, aborting the whole overlay before anything was added
+		val drawable = ResourcesCompat.getDrawable(ctx.resources, R.mipmap.ic_launcher, ctx.theme)
+		val iconWidth = ((drawable?.intrinsicWidth ?: 0) * 0.7).toInt()
+		val iconHeight = ((drawable?.intrinsicHeight ?: 0) * 0.7).toInt()
+		if (drawable != null && iconWidth > 0 && iconHeight > 0) {
+			val bitmap = Bitmap.createBitmap(iconWidth, iconHeight, Bitmap.Config.ARGB_8888)
 			val canvas = Canvas(bitmap)
 			drawable.setBounds(0, 0, canvas.width, canvas.height)
 			drawable.draw(canvas)
 			imageView.setImageBitmap(bitmap)
-		} ?: imageView.setImageResource(R.drawable.notification_icon)
+		} else {
+			imageView.setImageResource(R.drawable.notification_icon)
+		}
 		imageView.setOnClickListener {
 			menu.visibility = !menu.visibility
 		}
@@ -69,12 +74,27 @@ class OverlayManager : ServiceListener {
 		this.entranceView = imageView
 		wm.addView(imageView, params)
 
-		renderLayerView = RenderLayerView(ctx, wm, MinecraftRelay.session)
-		menu.visibility = false
-		menu.display(wm, ctx)
+		// each part of the overlay is added independently: a failure in one of them must not
+		// stop the rest from showing up, otherwise the GUI silently never loads at all
+		try {
+			renderLayerView = RenderLayerView(ctx, wm, MinecraftRelay.session)
+		} catch (t: Throwable) {
+			logError("render layer", t)
+		}
+
+		try {
+			menu.visibility = false
+			menu.display(wm, ctx)
+		} catch (t: Throwable) {
+			logError("configure menu", t)
+		}
 
 		shortcuts.forEach {
-			it.display(wm)
+			try {
+				it.display(wm)
+			} catch (t: Throwable) {
+				logError("shortcut ${it.module.name}", t)
+			}
 		}
 	}
 
@@ -87,13 +107,33 @@ class OverlayManager : ServiceListener {
 
 	override fun onServiceStopped() {
 		val wm = MyApplication.instance.getSystemService(VpnService.WINDOW_SERVICE) as WindowManager
-		entranceView?.let { wm.removeView(it) }
+		// views may be missing when the overlay was only partially built, and removeView throws
+		// for anything that is not attached - tear down every part independently
+		entranceView?.let {
+			try {
+				wm.removeView(it)
+			} catch (t: Throwable) {
+				logError("remove entrance view", t)
+			}
+		}
 		entranceView = null
-		renderLayerView?.destroy()
+		try {
+			renderLayerView?.destroy()
+		} catch (t: Throwable) {
+			logError("destroy render layer", t)
+		}
 		renderLayerView = null
-		menu.destroy(wm)
+		try {
+			menu.destroy(wm)
+		} catch (t: Throwable) {
+			logError("destroy configure menu", t)
+		}
 		shortcuts.forEach {
-			it.remove(wm)
+			try {
+				it.remove(wm)
+			} catch (t: Throwable) {
+				logError("remove shortcut ${it.module.name}", t)
+			}
 		}
 	}
 
