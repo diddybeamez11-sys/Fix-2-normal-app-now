@@ -24,7 +24,7 @@ class OverlayManager : ServiceListener {
 	var currentContext: Context? = null
 
 	// the service context is only set while AppService is alive; falling back to the application
-	// context keeps building the overlay possible instead of throwing a NullPointerException
+	// context keeps the overlay buildable instead of throwing a NullPointerException
 	val ctx: Context
 		get() = currentContext ?: MyApplication.instance
 
@@ -51,13 +51,17 @@ class OverlayManager : ServiceListener {
 
 		val imageView = ImageView(ctx)
 
-		// a drawable without an intrinsic size reports -1, which used to produce a zero/negative
-		// sized bitmap and throw, aborting the whole overlay before anything was added
-		val drawable = ResourcesCompat.getDrawable(ctx.resources, R.mipmap.ic_launcher, ctx.theme)
-		val iconWidth = ((drawable?.intrinsicWidth ?: 0) * 0.7).toInt()
-		val iconHeight = ((drawable?.intrinsicHeight ?: 0) * 0.7).toInt()
-		if (drawable != null && iconWidth > 0 && iconHeight > 0) {
-			val bitmap = Bitmap.createBitmap(iconWidth, iconHeight, Bitmap.Config.ARGB_8888)
+		val drawable = ResourcesCompat.getDrawable(
+			ctx.resources, R.mipmap.ic_launcher, ctx.theme
+		)
+		if (drawable != null) {
+			// Adaptive icons and some other drawables do not report an intrinsic size, and
+			// Bitmap.createBitmap would throw for a 0x0 bitmap, so fall back to the standard
+			// 108dp launcher icon size.
+			val fallbackSize = (108 * ctx.resources.displayMetrics.density * 0.7f).toInt().coerceAtLeast(1)
+			val width = (drawable.intrinsicWidth * 0.7f).toInt().takeIf { it > 0 } ?: fallbackSize
+			val height = (drawable.intrinsicHeight * 0.7f).toInt().takeIf { it > 0 } ?: fallbackSize
+			val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
 			val canvas = Canvas(bitmap)
 			drawable.setBounds(0, 0, canvas.width, canvas.height)
 			drawable.draw(canvas)
@@ -74,19 +78,21 @@ class OverlayManager : ServiceListener {
 		this.entranceView = imageView
 		wm.addView(imageView, params)
 
-		// each part of the overlay is added independently: a failure in one of them must not
-		// stop the rest from showing up, otherwise the GUI silently never loads at all
+		// every remaining part of the overlay is added on its own: a failure in one of them must
+		// not stop the others from showing up, otherwise the whole GUI silently never loads
 		try {
 			renderLayerView = RenderLayerView(ctx, wm, MinecraftRelay.session)
 		} catch (t: Throwable) {
 			logError("render layer", t)
 		}
 
-		try {
+		val menuFailure: Throwable? = try {
 			menu.visibility = false
 			menu.display(wm, ctx)
+			null
 		} catch (t: Throwable) {
 			logError("configure menu", t)
+			t
 		}
 
 		shortcuts.forEach {
@@ -95,6 +101,12 @@ class OverlayManager : ServiceListener {
 			} catch (t: Throwable) {
 				logError("shortcut ${it.module.name}", t)
 			}
+		}
+
+		// the menu is what the entrance icon opens, so without it the overlay is useless -
+		// let AppService know so it can tell the user instead of leaving a dead icon behind
+		if (menuFailure != null) {
+			throw menuFailure
 		}
 	}
 
@@ -107,8 +119,9 @@ class OverlayManager : ServiceListener {
 
 	override fun onServiceStopped() {
 		val wm = MyApplication.instance.getSystemService(VpnService.WINDOW_SERVICE) as WindowManager
-		// views may be missing when the overlay was only partially built, and removeView throws
-		// for anything that is not attached - tear down every part independently
+		// removeView throws for anything that is not attached, and the overlay may only have been
+		// built partially. Tear every part down independently so a stuck overlay window can never
+		// survive into the next session and block the GUI from loading again.
 		entranceView?.let {
 			try {
 				wm.removeView(it)

@@ -76,29 +76,32 @@ object MinecraftRelay {
 					}
 				}
 				scriptManager = ScriptManager()
-				scriptFileManager = ScriptManagerFileSystem(externalDir("scripts"), ".lua", scriptManager)
-				val scripts = scriptFileManager.listScript()
+				scriptFileManager = ScriptManagerFileSystem(
+					externalFilesDir("scripts"),
+					".lua",
+					scriptManager
+				)
 				Handler(Looper.getMainLooper()).post(Runnable {
 					Toast.makeText(
 						MyApplication.instance,
-						"[Script] loading ${scripts.size} scripts",
+						"[Script] loading ${scriptFileManager.listScript().size} scripts",
 						Toast.LENGTH_LONG
 					).show()
 				})
-				for (s in scripts) {
+				for (s in scriptFileManager.listScript()) {
 					scriptFileManager.loadScript(s)
 				}
 			} catch (t: Throwable) {
-				// Module/script loading must never take the relay - or the in-game GUI that is
-				// brought up right next to it - down with it.
-				logError("module loader", t)
+				// Loading modules/scripts must never take the whole app down nor prevent the
+				// relay from starting, so failures are only logged.
+				logError("load modules", t)
 			} finally {
 				// clean-up
 				loaderThread = null
 			}
 		}
 
-        configManager = ConfigManagerFileSystem(externalDir("configs"), ".json").also {
+        configManager = ConfigManagerFileSystem(externalFilesDir("configs"), ".json").also {
 			it.addSection(ConfigSectionModule(moduleManager))
 			it.addSection(ConfigSectionShortcut(MyApplication.overlayManager))
 			it.addSection(hudManager)
@@ -106,15 +109,14 @@ object MinecraftRelay {
     }
 
 	/**
-	 * external storage may be unavailable, in which case [android.content.Context.getExternalFilesDir]
-	 * returns null. Falling back to the internal files dir keeps this object initializable: a throw
-	 * here would poison every later access to [MinecraftRelay] and stop the overlay GUI from loading.
+	 * Returns the app specific external directory, falling back to the internal one when the
+	 * external storage is not available (getExternalFilesDir returns null in that case).
 	 */
-	private fun externalDir(name: String): File {
-		return MyApplication.instance.getExternalFilesDir(name)
-			?: File(MyApplication.instance.filesDir, name).also {
-				if (!it.exists()) it.mkdirs()
-			}
+	private fun externalFilesDir(name: String): File {
+		val dir = MyApplication.instance.getExternalFilesDir(name)
+			?: File(MyApplication.instance.filesDir, name)
+		if (!dir.exists()) dir.mkdirs()
+		return dir
 	}
 
     private fun registerAdditionalModules(moduleManager: ModuleManager) {

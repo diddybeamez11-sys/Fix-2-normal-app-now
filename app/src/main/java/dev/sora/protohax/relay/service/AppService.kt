@@ -59,57 +59,39 @@ class AppService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent ?: return START_NOT_STICKY
 
-        if (ACTION_START == intent.action) {
-            try {
+        val action = intent.action
+        try {
+            if (ACTION_START == action) {
                 // Promote the service immediately. Starting the VPN/TUN can take long enough
                 // that Android may otherwise kill the service before it enters foreground.
                 startForeground(1, createNotification())
-            } catch (t: Throwable) {
-                logError("startForeground", t)
-                toastStartFailure(t)
-                stopSelf()
-                return super.onStartCommand(intent, flags, startId)
-            }
-
-            try {
                 startVPN()
-            } catch (t: Throwable) {
-                // This used to be swallowed by a single catch-all around the whole command,
-                // which looked exactly like "the GUI does not load": the tunnel never came up,
-                // the overlay listeners were never notified and the foreground service stayed
-                // around pretending everything was fine. Report it and tear down instead.
-                logError("command", t)
-                toastStartFailure(t)
+            } else {
                 stopVPN()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
-        } else {
-            try {
-                stopVPN()
+        } catch (t: Throwable) {
+            logError("command", t)
+            if (ACTION_START == action) {
+                // Never leave a foreground service (and its notification) running when the VPN
+                // could not be started; the user has to know why nothing happened.
+                toast(getString(R.string.vpn_start_failed, t.message ?: t.javaClass.simpleName))
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
-            } catch (t: Throwable) {
-                logError("command", t)
             }
         }
         return super.onStartCommand(intent, flags, startId)
     }
 
-    private fun toastStartFailure(t: Throwable) {
-        try {
-            toast(getString(R.string.vpn_start_failed, t.message ?: t.javaClass.simpleName))
-        } catch (ignored: Throwable) {
-            logError("toast", ignored)
-        }
-    }
-
     private fun startVPN() {
         val targetPackage = MainActivity.targetPackage
         if (targetPackage.isEmpty()) {
-            // addAllowedApplication("") throws, which used to abort the start silently.
-            // The caller turns this into a single user visible message.
-            throw IllegalStateException("no target application selected")
+            logError("no target application selected, aborting VPN start")
+            toast(R.string.dashboard_no_application)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
         }
 
         val (hasIPv4, hasIPv6) = when(Settings.ipv6Status.getValue(this)) {
@@ -137,7 +119,15 @@ class AppService : VpnService() {
         }
 
         val vpnDescriptor = builder.establish()
-            ?: throw IllegalStateException("VpnService.Builder.establish() returned null")
+        if (vpnDescriptor == null) {
+            // establish() returns null when the VPN consent dialog was never accepted or when
+            // the system refuses to create a second tunnel (e.g. an always-on VPN is active).
+            logError("establish VPN failed: VPN permission denied or another VPN is active")
+            toast(R.string.vpn_permission_denied)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
         this.vpnDescriptor = vpnDescriptor
 
         val tun = TUN().apply {
@@ -155,24 +145,28 @@ class AppService : VpnService() {
         logInfo("netstack started")
         isActive = true
 
-        // Bring the in-game overlay up first and keep it isolated from the relay. Both steps
-        // used to share one try block, so any relay failure (port already bound, loader thread
-        // interrupted, ...) silently suppressed the GUI - and vice versa.
+        // The overlay GUI has to be brought up even if the relay fails to start, and a broken
+        // overlay must not prevent the relay from running, so both steps are isolated from each
+        // other and neither can silently swallow the other one.
         try {
             serviceListeners.forEach { it.onServiceStarted() }
+            logInfo("overlay GUI created")
+            toast(R.string.overlay_hint)
         } catch (t: Throwable) {
-            logError("start callback", t)
+            logError("start overlay", t)
+            toast(getString(R.string.overlay_start_failed, t.message ?: t.javaClass.simpleName))
+            if (!android.provider.Settings.canDrawOverlays(this)) {
+                toast(R.string.request_overlay)
+            }
         }
 
         try {
             MinecraftRelay.announceRelayUp()
         } catch (t: Throwable) {
-            logError("relay start", t)
-            try {
-                toast(getString(R.string.relay_start_failed, t.message ?: t.javaClass.simpleName))
-            } catch (ignored: Throwable) {
-                logError("toast", ignored)
-            }
+            logError("start relay", t)
+            // the overlay is up but no packets will be processed, so say so instead of leaving
+            // the user wondering why the cheats do nothing
+            toast(getString(R.string.relay_start_failed, t.message ?: t.javaClass.simpleName))
         }
     }
 
@@ -190,14 +184,14 @@ class AppService : VpnService() {
     }
 
     private fun checkNetState(): Pair<Boolean, Boolean> {
-        // Detection needs ACCESS_NETWORK_STATE and touches system APIs that can throw.
-        // It must never abort the VPN start: falling back to IPv4-only keeps the tunnel
-        // (and therefore the in-game overlay GUI) working.
-        return try {
+        // ConnectivityManager requires ACCESS_NETWORK_STATE (declared in the manifest) and can
+        // still fail on some devices, so a lookup error must never abort the VPN startup: fall
+        // back to the IPv4-only configuration instead.
+        try {
             val connectivityManager = this.getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
             val activeNetwork = connectivityManager.activeNetwork ?: return true to false
-            val interfaceName = connectivityManager.getLinkProperties(activeNetwork)?.interfaceName
-                ?: return true to false
+            val activeNetworkProperties = connectivityManager.getLinkProperties(activeNetwork) ?: return true to false
+            val interfaceName = activeNetworkProperties.interfaceName
 
             val networkInterfaces = NetworkInterface.getNetworkInterfaces()
             while (networkInterfaces.hasMoreElements()) {
@@ -213,21 +207,20 @@ class AppService : VpnService() {
                         hasIPv4 = true
                     }
                 }
-                // an interface reporting no usable address must not disable both stacks
-                return if (hasIPv4 || hasIPv6) hasIPv4 to hasIPv6 else true to false
+                return hasIPv4 to hasIPv6
             }
-
-            true to false
         } catch (t: Throwable) {
-            logError("checkNetState", t)
-            true to false
+            logError("check net state", t)
         }
+
+        return true to false
     }
 
     /**
-     * The selected application may have been uninstalled, in which case resolving its label
-     * throws. That used to take the whole foreground notification - and with it the VPN start
-     * and the in-game GUI - down.
+     * The selected application may have been uninstalled since it was picked, in which case
+     * resolving its label throws NameNotFoundException. That used to take createNotification()
+     * and therefore startForeground() - and with it the whole VPN start and the in-game GUI -
+     * down with it.
      */
     private fun targetAppName(): String {
         val targetPackage = MainActivity.targetPackage
