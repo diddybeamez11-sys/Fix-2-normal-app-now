@@ -1,0 +1,125 @@
+# TEMPORARY end-to-end check (NOT part of the product): black-box test of the unmodified release APK on an
+# emulator, driving the real UI. It is removed again once the findings are handled.
+name: E2E (temporary)
+
+on:
+  push:
+    branches:
+      - 'arena/482c6c59-fix-2-normal-app-now'
+
+permissions:
+  contents: read
+  checks: write
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: Alextheplayer919/ProtoHax
+          ref: 962b96226b09f80ae471d9c6958a0b3002cb3ab1
+          path: ProtoHax
+          submodules: true
+      - uses: actions/checkout@v7
+        with:
+          repository: pmmp/BedrockData
+          ref: 7484fe3c3d7949fd48cc520add4f7eeebc4ba4af
+          path: BedrockData
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pyyaml
+      # exactly the commands of android.yml: OAuth patch ... verify jar
+      - name: ProtoHax build (steps shared with android.yml)
+        run: python3 .github/e2e/run_step.py .github/workflows/android.yml build "Patch ProtoHax OAuth" "Grant Gradle permission"
+      - name: Build release APK (unmodified)
+        run: |
+          chmod +x gradlew
+          ./gradlew clean --no-daemon
+          ./gradlew app:assembleRelease --stacktrace --no-daemon
+      - run: |
+          mkdir -p "$RUNNER_TEMP/keep"
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/keep/"
+          cp app/build/outputs/mapping/release/mapping.txt "$RUNNER_TEMP/keep/"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: apk-e2e
+          path: ${{ runner.temp }}/keep/*
+          overwrite: true
+
+  e2e:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: apk-e2e
+          path: apk
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pillow
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Drive the real UI on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: python3 .github/e2e/e2e.py
+      - name: Map obfuscated names back
+        if: always()
+        continue-on-error: true
+        run: |
+          OUT="$GITHUB_WORKSPACE/diag-out"; mkdir -p "$OUT"
+          if [ -f apk/mapping.txt ] && [ -f "$OUT/11-e2e-logcat-filtered.txt" ]; then
+            python3 - "$OUT" <<'PY'
+          import re, sys
+          out = sys.argv[1]
+          m = {}
+          for line in open('apk/mapping.txt', errors='replace'):
+              if line[:1] not in ' \t#\n':
+                  mm = re.match(r'^(\S+) -> (\S+):\s*$', line)
+                  if mm: m[mm.group(2)] = mm.group(1)
+          tok = re.compile(r'[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$<>]+)+')
+          def sub(x):
+              t = x.group(0); p = t.split('.')
+              for k in range(len(p), 0, -1):
+                  c = '.'.join(p[:k])
+                  if c in m and m[c] != c:
+                      return '%s{=%s%s}' % (t, m[c], ('.' + '.'.join(p[k:])) if p[k:] else '')
+              return t
+          src = open(out + '/11-e2e-logcat-filtered.txt', errors='replace').read()
+          open(out + '/12-e2e-logcat-retraced.txt', 'w').write(tok.sub(sub, src))
+          PY
+          fi
+      - name: Post findings
+        if: always()
+        continue-on-error: true
+        run: python3 .github/e2e/post.py e2e "$GITHUB_WORKSPACE/diag-out/00-summary.txt" $(ls "$GITHUB_WORKSPACE"/diag-out/[0-9][0-9]-*.txt | sort)
