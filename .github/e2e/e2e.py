@@ -222,6 +222,28 @@ def thread_count():
     return int(out) if out.isdigit() else -1
 
 
+def write_thread_dump(dump):
+    """names + states of all threads, and the top frames of the interesting ones (netty loops, RakRelay, relay-start)"""
+    blocks = re.split(r"\n(?=\")", dump)
+    lines = ["ART thread dump: %d chars, %d blocks" % (len(dump), len(blocks)), ""]
+    interesting = []
+    for b in blocks:
+        m = re.match(r'"([^"]+)".*?(Runnable|Native|Blocked|Waiting|TimedWaiting|Sleeping|Suspended)?', b)
+        if not m:
+            continue
+        name = m.group(1)
+        state = re.search(r'"[^"]+"[^\n]*? (\w+)\n', b)
+        lines.append("  %-42s %s" % (name, state.group(1) if state else "?"))
+        if re.search(r"nioEventLoopGroup|DefaultEventLoop|RakRelay|relay-start|defaultEventLoop|pool-", name):
+            frames = [l.strip() for l in b.split("\n") if l.strip().startswith(("at ", "native:"))][:9]
+            interesting.append((name, frames))
+    lines.append("")
+    for name, frames in interesting:
+        lines.append("== %s" % name)
+        lines += ["     " + f for f in frames]
+    open(os.path.join(OUT, "25-thread-dump.txt"), "w").write("\n".join(lines))
+
+
 def run_client(who, target, timeout=150):
     cmd = "/data/local/tmp/rakclient %s" % target if who is None else "su %s /data/local/tmp/rakclient %s" % (who, target)
     return sh(cmd, timeout=timeout)
@@ -280,9 +302,26 @@ def relay_test():
             if "CLIENT" in out:
                 break
         time.sleep(2)
-    # two more sessions on port 19132 to measure what every connection leaves behind
+    # two more sessions on port 19132: they stall - take an ART thread dump while the third one is stuck
+    log("cpu cores: %s" % sh("nproc").strip())
+    pid = (sh("pidof %s" % PKG).strip().split() or [""])[0]
+    who = "%d,%d,3003" % (TARGET_UID, TARGET_UID)
     for n in (3, 4):
-        extra = run_client("%d,%d,3003" % (TARGET_UID, TARGET_UID), "10.0.2.2:19132")
+        if n == 3:
+            proc = subprocess.Popen(["adb", "shell", "su %s /data/local/tmp/rakclient 10.0.2.2:19132" % who],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            time.sleep(12)
+            sh("rm -f /data/anr/*; kill -3 %s" % pid)
+            time.sleep(4)
+            dump = sh("cat /data/anr/* 2>/dev/null | head -c 900000", timeout=120)
+            try:
+                extra = proc.communicate(timeout=90)[0].decode("utf-8", "replace")
+            except Exception:  # noqa
+                proc.kill()
+                extra = "(client did not finish)"
+            write_thread_dump(dump)
+        else:
+            extra = run_client(who, "10.0.2.2:19132")
         log("RELAY extra run %d:\n%s" % (n, extra.strip()))
     time.sleep(5)
     threads_after = thread_count()

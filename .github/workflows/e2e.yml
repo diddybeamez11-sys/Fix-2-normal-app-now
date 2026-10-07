@@ -17,50 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: Alextheplayer919/ProtoHax
-          ref: 962b96226b09f80ae471d9c6958a0b3002cb3ab1
-          path: ProtoHax
-          submodules: true
-      - uses: actions/checkout@v7
-        with:
-          repository: pmmp/BedrockData
-          ref: 7484fe3c3d7949fd48cc520add4f7eeebc4ba4af
-          path: BedrockData
-      - uses: actions/setup-java@v6
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: gradle
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-      - run: pip install --quiet pyyaml
-      - name: ProtoHax build (steps shared with android.yml)
-        run: python3 .github/e2e/run_step.py .github/workflows/android.yml build "Patch ProtoHax OAuth" "Grant Gradle permission"
-      - name: Build release APK (unmodified)
-        run: |
-          chmod +x gradlew
-          ./gradlew clean --no-daemon
-          ./gradlew app:assembleRelease --stacktrace --no-daemon
-      - run: |
-          mkdir -p "$RUNNER_TEMP/keep"
-          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/keep/"
-          cp app/build/outputs/mapping/release/mapping.txt "$RUNNER_TEMP/keep/"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: apk-e2e
-          path: ${{ runner.temp }}/keep/*
-          overwrite: true
-
   e2e:
-    needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -71,6 +28,8 @@ jobs:
         with:
           name: apk-e2e
           path: apk
+          run-id: 37679703392
+          github-token: ${{ github.token }}
       - uses: actions/setup-java@v6
         with:
           java-version: '21'
