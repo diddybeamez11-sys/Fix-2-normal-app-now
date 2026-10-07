@@ -97,6 +97,15 @@ def find_node(label, nodes):
     return None
 
 
+def screen_size():
+    m = re.search(r"(\d+)x(\d+)", sh("wm size"))
+    return (int(m.group(1)), int(m.group(2))) if m else (1080, 2340)
+
+
+def area(f):
+    return (f[2] - f[0]) * (f[3] - f[1])
+
+
 def tap(b):
     x, y = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
     sh("input tap %d %d" % (x, y))
@@ -235,14 +244,16 @@ def main():
     screenshot("2-after-connect")
 
     # ---- 5. tap the floating icon -> the menu must open -------------------------------------------------
-    icon = [w for w in overlay if w["frame"] and w["frame"][2] - w["frame"][0] < 400 and w["frame"][3] - w["frame"][1] < 400]
-    icon.sort(key=lambda w: (w["frame"][2] - w["frame"][0]) * (w["frame"][3] - w["frame"][1]))
+    sw, sh_ = screen_size()
+    log("screen %dx%d" % (sw, sh_))
+    icon = [w for w in overlay if w["frame"] and area(w["frame"]) < 0.2 * sw * sh_]
+    icon.sort(key=lambda w: area(w["frame"]))
     if icon:
         f = icon[0]["frame"]
         spot = ((f[0] + f[2]) // 2, (f[1] + f[3]) // 2)
     else:
         spot = (40, 140)
-    check("floating icon window found", bool(icon), "frame=%s" % (icon[0]["frame"] if icon else None))
+    check("floating icon window found", bool(icon), "frame=%s" % (str(icon[0]["frame"]) if icon else "none",))
     log("tap floating icon at %s" % (spot,))
     sh("input tap %d %d" % spot)
     time.sleep(4)
@@ -251,13 +262,33 @@ def main():
     menu_nodes = ui_nodes()
     menu_texts = [t or d for t, dsc, c, b2, k in menu_nodes for d in [dsc] if (t or d)]
     log("texts visible after tapping the icon (%d): %s" % (len(menu_texts), menu_texts[:60]))
-    full = [w for w in ws2 if w["frame"] and (w["frame"][2] - w["frame"][0]) > 800 and w["type"] == "APPLICATION_OVERLAY"]
-    check("a full-screen overlay (the menu) is visible after the tap",
-          any(w["ready"] == "true" for w in full), "%d full-screen overlay window(s)" % len(full))
+    full = [w for w in ws2 if w["frame"] and (w["frame"][2] - w["frame"][0]) >= 0.9 * sw and w["type"] == "APPLICATION_OVERLAY"]
+    menu_before = [w for w in overlay if w["frame"] and w["frame"][2] - w["frame"][0] >= 0.9 * sw and "DIM_BEHIND" in w["flags"]]
+    menu_after = [w for w in full if "DIM_BEHIND" in w["flags"] or "NOT_TOUCHABLE" not in w["flags"]]
+    check("the menu window was hidden before the tap", all(w["ready"] != "true" for w in menu_before),
+          "before=%s" % [(w["ready"], w["vis"]) for w in menu_before])
+    check("the menu window is visible after the tap", any(w["ready"] == "true" for w in menu_after),
+          "after=%s" % [(w["ready"], w["vis"], w["flags"][:60]) for w in menu_after])
     cat_hits = [t for t in menu_texts if t.lower() in ("combat", "movement", "visual", "misc", "world", "player", "fly", "killaura", "speed")]
     check("the menu lists modules / categories", len(cat_hits) > 0 or len(menu_texts) > 8, "matched=%s" % cat_hits[:8])
     crash = logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG))
     check("no crash after opening the menu", not crash, str(crash[:2])[:200])
+
+    # toggle one module from the open menu (EventModuleToggle -> the menu's stateMap listener)
+    toggled = None
+    for name in ("Fly", "Speed", "Velocity", "KillAura", "NoFall", "AirJump", "Spammer", "BGM", "Surround"):
+        nb = find_node(name, menu_nodes)
+        if nb:
+            toggled = name
+            log("toggle module %s at %s" % (name, tap(nb)))
+            break
+    time.sleep(2)
+    if toggled:
+        screenshot("3b-module-toggled")
+        check("toggling module '%s' does not crash" % toggled,
+              not logcat_lines(r"FATAL EXCEPTION|AndroidRuntime: Process: " + re.escape(PKG)))
+    else:
+        log("no known module name found among the visible menu texts")
 
     # tap the icon again -> toggles the menu closed
     sh("input tap %d %d" % spot)
@@ -287,7 +318,7 @@ def main():
             time.sleep(14)
             ws5 = show_windows("after the second Connect")
             ov = [w for w in ws5 if w["type"] == "APPLICATION_OVERLAY"]
-            small = [w for w in ov if w["frame"] and w["frame"][2] - w["frame"][0] < 400]
+            small = [w for w in ov if w["frame"] and area(w["frame"]) < 0.2 * sw * sh_]
             check("second session: exactly one floating icon", len(small) == 1, "%d icon window(s)" % len(small))
             check("second session: VPN tunnel is up", bool(vpn_up()))
             screenshot("6-second-session")
