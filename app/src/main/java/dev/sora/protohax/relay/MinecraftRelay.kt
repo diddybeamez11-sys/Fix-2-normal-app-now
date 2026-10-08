@@ -49,7 +49,7 @@ object MinecraftRelay {
     val configManager: ConfigManagerFileSystem
 	val hudManager: HudManager
 
-	val tokenCacheFile = File(MyApplication.instance.cacheDir, "token_cache.json")
+	val tokenCacheFile = XboxAuthWarmUp.tokenCacheFile
 
 	var loaderThread: Thread? = null
 
@@ -172,6 +172,12 @@ object MinecraftRelay {
 			relay!!.bind(InetSocketAddress("0.0.0.0", 1337))
 			logInfo("relay started")
 		}
+
+		// ProtoHax runs the whole Xbox Live login inside the packet pipeline, on the login packet of the
+		// game. Doing it here as well - while the user is still starting the game - keeps that login packet
+		// fast (the identity token is cached, the TLS connections are warm) and reports a failure instead of
+		// leaving the user in the game's "connection lost" screen.
+		XboxAuthWarmUp.warmUp("relay started", notifyUser = true)
 	}
 
 	class Relay(listener: MinecraftRelayListener) : dev.sora.relay.MinecraftRelay(listener) {

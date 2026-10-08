@@ -69,6 +69,8 @@ class NativeRakChannel(parent: Channel, private val rakConn: RakConn) : Abstract
 
 	override fun doClose() {
 		rakConn.close()
+		// this loop was created for this connection (it runs the blocking read); its thread outlived every connection
+		eventLoopRead.shutdownGracefully()
 	}
 
 	override fun doBeginRead() {
@@ -117,6 +119,8 @@ class NativeRakChannel(parent: Channel, private val rakConn: RakConn) : Abstract
 				buf.remove()
 			} else if (msg is RakMessage) {
 				writeByteBuf(msg.content())
+				// without this the same message stayed current and doWrite spun on it forever
+				buf.remove()
 			} else {
 				buf.remove(UnsupportedOperationException("unsupported message type: " + StringUtil.simpleClassName(msg)))
 			}

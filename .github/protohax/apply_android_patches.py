@@ -21,7 +21,42 @@ usage: apply_android_patches.py <ProtoHax checkout> <pmmp/BedrockData checkout>
    java.awt.Color reference of the shaded jar at it (Shadow's own relocate cannot be used: the pinned Shadow
    8.0.0 bundles an ASM that cannot read the Java 21 class files ProtoHax is compiled to).
 
-3. Registry data for protocol 844
+3. RakNet client GUID
+   The relay connects to the real server with a RakNet client whose GUID is Random.nextLong() - positive half
+   of the time. The vanilla Bedrock client's GUID is always negative (go-raknet, which Dragonfly and many
+   community servers are built on: "This should always be negative as per the vanilla client implementation"),
+   and such servers silently ignore OpenConnectionRequest2 of a positive GUID ("invalid ClientGUID ... expected
+   negative"), so about every second connection attempt ends in a connect timeout. The sign bit is set.
+   (Found with the emulator relay test of branch arena/482c6c59.)
+
+4. Inbound frame codec (the relay could not decode a single packet)
+   ProtoHax replaces Cloudburst's FrameIdCodec with its own CustomFrameIdCodec (to add RakNet reliability).
+   Cloudburst's pipeline is FrameIdCodec -> CompressionCodec -> BedrockBatchDecoder -> BedrockPacketCodec and,
+   since the BedrockBatchWrapper refactoring, FrameIdCodec.decode emits a BedrockBatchWrapper while
+   CompressionCodec only accepts that. CustomFrameIdCodec.decode still emitted a raw ByteBuf (the encode side
+   had been adapted when ProtoHax was moved to the Beta13 snapshot, the decode side had not), so the very first
+   packet of every connection - in both directions - failed with
+   "ClassCastException: UnpooledSlicedByteBuf cannot be cast to BedrockBatchWrapper" in CompressionCodec.
+   decode now wraps the payload exactly like Cloudburst's own FrameIdCodec.
+   (Found with the emulator relay test of branch arena/482c6c59.)
+
+5. Xbox login robustness (a single failed request used to end the game session)
+   The Xbox Live login - Microsoft access token, Xbox user / device / title / XSTS tokens and the
+   multiplayer.minecraft.net chain - is fetched *inside* the packet pipeline, when the game sends its
+   LoginPacket, and every request had exactly one attempt. Microsoft's login services answer such a request
+   with a temporary network / TLS failure every now and then; on Android the app logged e.g.
+
+     login failed: javax.net.ssl.SSLHandshakeException: ... SSLV3_ALERT_HANDSHAKE_FAILURE
+       ... HANDSHAKE_FAILURE_ON_CLIENT_HELLO
+
+   followed by "login success" (logged unconditionally, even though the login had failed) and a disconnect of
+   the client: the game never got the answer it was waiting for, and the relay had forwarded a login packet it
+   could not sign. The two requests are now retried (retryAuth, only for network / TLS failures and the HTTP
+   status assertions - a missing Xbox GamerTag still fails immediately), the success is logged only when the
+   login really succeeded, the kick message names the reason, and a login that could not be prepared is not
+   forwarded to the server.
+
+6. Registry data for protocol 844
    ProtoHax resolves block / item definitions with MappingProvider.craftMapping(protocol), which takes the
    newest data set <= the protocol. The data of its `mcpedata` submodule ends at protocol 594 (Minecraft
    1.20.10), so a 1.21.111 session would silently use 1.20.10 block palettes. The same data is published
@@ -81,7 +116,114 @@ target.parent.mkdir(parents=True, exist_ok=True)
 shutil.copyfile(here / "Color.java", target)
 print("added %s" % target.relative_to(root))
 
-# --- 3. registry data for protocol 844 ------------------------------------------------------------------
+# --- 3. RakNet client GUID: negative like the vanilla client's -------------------------------------------
+patch(src + "MinecraftRelay.kt",
+      "RakChannelOption.RAK_PROTOCOL_VERSION))\n\t\t\t\t.option(RakChannelOption.RAK_GUID, Random.nextLong())",
+      "RakChannelOption.RAK_PROTOCOL_VERSION))\n"
+      "\t\t\t\t// the vanilla client's RakNet GUID is always negative (servers built on go-raknet reject positive ones)\n"
+      "\t\t\t\t.option(RakChannelOption.RAK_GUID, Random.nextLong() or Long.MIN_VALUE)")
+
+# --- 4. inbound frame codec: emit the BedrockBatchWrapper the next pipeline stage requires ----------------
+patch(src + "session/CustomFrameIdCodec.kt",
+      "out.add(content.readRetainedSlice(content.readableBytes()))",
+      "out.add(BedrockBatchWrapper.newInstance(content.readRetainedSlice(content.readableBytes()), null))")
+
+# --- 5. Xbox login: retry the login requests, log the truth and never forward a login that cannot work ----
+patch(src + "session/listener/xbox/RelayListenerXboxLogin.kt",
+      "                } ?: fetchIdentityToken(accessToken(), deviceInfo).also {",
+      "                } ?: retryAuth(\"fetch the Xbox identity token (login.live.com, *.xboxlive.com)\") {\n"
+      "                    fetchIdentityToken(accessToken(), deviceInfo)\n"
+      "                }.also {")
+
+patch(src + "session/listener/xbox/RelayListenerXboxLogin.kt",
+      "    private val chain: List<String>\n        get() = fetchChain(identityToken.token, keyPair)",
+      "    private val chain: List<String>\n"
+      "        get() = retryAuth(\"fetch the login chain (multiplayer.minecraft.net)\") {\n"
+      "            fetchChain(identityToken.token, keyPair)\n"
+      "        }")
+
+patch(src + "session/listener/xbox/RelayListenerXboxLogin.kt",
+      """        if (packet is LoginPacket) {
+\t\t\tsession.keyPair = keyPair
+            try {
+                packet.authPayload = CertificateChainPayload(chain)
+\t\t\t\tpacket.clientJwt = signJWT(packet.clientJwt.split('.')[1], keyPair, base64Encoded = true)
+            } catch (e: Throwable) {
+                session.inboundPacket(DisconnectPacket().apply {
+                    setKickMessage(e.toString())
+                })
+                logError("login failed", e)
+            }
+            logInfo("login success")
+        }
+
+        return true""",
+      """        if (packet is LoginPacket) {
+\t\t\tsession.keyPair = keyPair
+            try {
+                packet.authPayload = CertificateChainPayload(chain)
+\t\t\t\tpacket.clientJwt = signJWT(packet.clientJwt.split('.')[1], keyPair, base64Encoded = true)
+                logInfo("login success")
+            } catch (e: Throwable) {
+                logError("login failed", e)
+                session.inboundPacket(DisconnectPacket().apply {
+                    setKickMessage("Xbox login failed: " + (e.message ?: e.toString()))
+                })
+                // the login of this session cannot be signed, so the game's own (unsigned) login packet
+                // must not be forwarded: the server could only kick the player for it
+                return false
+            }
+        }
+
+        return true""")
+
+patch(src + "session/listener/xbox/RelayListenerXboxLogin.kt",
+      "        fun fetchIdentityToken(accessToken: String, deviceInfo: XboxDeviceInfo): XboxIdentityToken {",
+      '''        /**
+         * The Xbox Live login services answer a request with a temporary network / TLS failure every now
+         * and then. On Android such a failure shows up as
+         * "SSLHandshakeException ... SSLV3_ALERT_HANDSHAKE_FAILURE ... HANDSHAKE_FAILURE_ON_CLIENT_HELLO":
+         * the TLS handshake of one request is refused, the next one usually succeeds.
+         *
+         * Every request of the login used to have exactly one attempt, and because the login packet is
+         * answered inside the packet pipeline such a hiccup ended the whole game session (the "login failed"
+         * of such a session was followed by a disconnect while the game waited for its login answer).
+         * Retrying lets the login succeed instead.
+         */
+        fun <T> retryAuth(what: String, attempts: Int = 3, block: () -> T): T {
+            for (attempt in 1..attempts) {
+                try {
+                    return block()
+                } catch (t: Throwable) {
+                    if (attempt == attempts || !isTransientAuthFailure(t)) {
+                        throw t
+                    }
+                    logWarn("$what failed (attempt $attempt/$attempts), retrying: $t")
+                    try {
+                        Thread.sleep(500L * attempt)
+                    } catch (interrupted: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw t
+                    }
+                }
+            }
+
+            error("$what failed")
+        }
+
+        private fun isTransientAuthFailure(t: Throwable): Boolean {
+            // "Have you registered a Xbox GamerTag?" - retrying cannot help, the player has to sign in
+            if (t is XboxGamerTagException) {
+                return false
+            }
+            // network and TLS failures (SocketException, SSLException, timeouts, ...) and the
+            // "Http code <n>" assertions of the login requests
+            return t is java.io.IOException || t is AssertionError
+        }
+
+        fun fetchIdentityToken(accessToken: String, deviceInfo: XboxDeviceInfo): XboxIdentityToken {''')
+
+# --- 6. registry data for protocol 844 ------------------------------------------------------------------
 info = json.loads((bedrock_data / "protocol_info.json").read_text())["version"]
 version = "%d.%d.%d" % (info["major"], info["minor"], info["patch"])
 if info["protocol_version"] != TARGET_PROTOCOL or version != TARGET_VERSION or info["beta"]:
