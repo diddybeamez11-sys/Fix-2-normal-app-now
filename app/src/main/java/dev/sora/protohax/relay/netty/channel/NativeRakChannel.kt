@@ -11,6 +11,7 @@ import io.netty.channel.ChannelPromise
 import io.netty.channel.DefaultEventLoop
 import io.netty.channel.EventLoop
 import io.netty.util.internal.StringUtil
+import dev.sora.relay.utils.logInfo
 import libmitm.RakConn
 import org.cloudburstmc.netty.channel.raknet.packet.RakMessage
 import java.net.InetSocketAddress
@@ -93,13 +94,19 @@ class NativeRakChannel(parent: Channel, private val rakConn: RakConn) : Abstract
 				val message = rakConn.read()
 				pipeline.fireChannelRead(Unpooled.wrappedBuffer(message))
 			} catch (t: Throwable) {
-				pipeline.fireExceptionCaught(t)
-				if (!rakConn.isOpen) {
+				if (rakConn.isOpen) {
+					// the connection is still up, so this is a real read error the pipeline has to see
+					pipeline.fireExceptionCaught(t)
+				} else {
+					// The game closed the connection - the normal end of a session. Reporting the
+					// native read error ("use of closed network connection") as an exception only
+					// made every clean disconnect look like a crash in the log.
+					logInfo("game connection closed: ${t.message}")
 					pipeline.fireChannelInactive()
 					// Nothing else closes this channel: on the game side the RakNet session lives in
 					// the native library, so netty never learns that the connection ended. Without
 					// this close the close future never completes, doClose() never runs and every
-					// session left its read loop thread - and the event loop group the relay created
+					// session left its read loop thread - and the event loop group the relay creates
 					// for the connection to the server - behind for as long as the app ran.
 					close()
 				}

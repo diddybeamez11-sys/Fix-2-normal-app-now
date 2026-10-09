@@ -201,8 +201,13 @@ object MinecraftRelay {
 			override fun write(ctx: ChannelHandlerContext, msg: Any, promise: ChannelPromise) {
 				if (!promise.isVoid) {
 					promise.addListener(ChannelFutureListener { future ->
-						if (!future.isSuccess) {
+						if (future.isSuccess) {
+							// nothing to report
+						} else if (future.channel().isActive) {
 							logError("packet to the game could not be sent", future.cause())
+						} else {
+							// the session ended before the packet left: expected, not a defect
+							logInfo("packet to the game dropped, the connection is closed: ${future.cause()}")
 						}
 					})
 				}
