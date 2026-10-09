@@ -11,9 +11,6 @@
 name: Relay end-to-end check
 
 on:
-  push:
-    branches:
-      - 'arena/3804225b-fix-2-normal-app-now'
   workflow_dispatch:
 
 permissions:
