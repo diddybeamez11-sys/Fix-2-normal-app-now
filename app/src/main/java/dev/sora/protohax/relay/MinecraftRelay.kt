@@ -25,20 +25,27 @@ import dev.sora.relay.game.GameSession
 import dev.sora.relay.session.MinecraftRelaySession
 import dev.sora.relay.session.listener.RelayListenerAutoCodec
 import dev.sora.relay.session.listener.RelayListenerEncryptedSession
-import dev.sora.relay.session.listener.RelayListenerNetworkSettings
 import dev.sora.relay.session.listener.xbox.RelayListenerXboxLogin
 import dev.sora.relay.session.listener.xbox.cache.XboxIdentityTokenCacheFileSystem
 import dev.sora.relay.utils.logError
 import dev.sora.relay.utils.logInfo
+import io.netty.channel.Channel
 import io.netty.channel.ChannelFactory
+import io.netty.channel.ChannelFutureListener
+import io.netty.channel.ChannelHandlerContext
+import io.netty.channel.ChannelOutboundHandlerAdapter
+import io.netty.channel.ChannelPromise
 import io.netty.channel.ServerChannel
 import org.cloudburstmc.netty.channel.raknet.RakReliability
 import java.io.File
 import java.net.InetSocketAddress
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 
 object MinecraftRelay {
+
+	private const val DROPPED_PACKET_WATCHDOG = "protohax-dropped-packet-watchdog"
 
     private var relay: Relay? = null
 
@@ -127,7 +134,9 @@ object MinecraftRelay {
         return Relay(object : MinecraftRelayListener {
             override fun onSessionCreation(session: MinecraftRelaySession): InetSocketAddress {
                 // add listeners
-                session.listeners.add(RelayListenerNetworkSettings(session))
+                watchDroppedPackets(session.peer.channel)
+                closeServerConnectionGroup(session)
+                session.listeners.add(RelayListenerCompression(session))
                 session.listeners.add(RelayListenerAutoCodec(session))
                 this@MinecraftRelay.session.netSession = session
                 session.listeners.add(this@MinecraftRelay.session)
@@ -156,6 +165,56 @@ object MinecraftRelay {
             }
         })
     }
+
+	/**
+	 * Shuts the event loop group of the connection to the server down once the session is over.
+	 *
+	 * ProtoHax creates one NioEventLoopGroup per session for that connection (MinecraftRelay
+	 * .BedrockRelayInitializer.createSession0) and never shuts it down, so every join leaked about
+	 * three threads - they stayed parked for as long as the app was running. The group belongs to
+	 * this session alone; the group of the game connection is the one of the relay server and must
+	 * stay up, so only the former is terminated here.
+	 */
+	private fun closeServerConnectionGroup(session: MinecraftRelaySession) {
+		session.peer.channel.closeFuture().addListener(ChannelFutureListener {
+			val group = session.client?.peer?.channel?.eventLoop()?.parent()
+			if (group != null && !group.isShuttingDown) {
+				group.shutdownGracefully(200L, 3000L, TimeUnit.MILLISECONDS)
+			}
+		})
+	}
+
+	/**
+	 * Logs packets the netty pipeline of the game connection fails to encode or to send.
+	 *
+	 * `BedrockPeer.sendPacketImmediately` ignores the write promise, so an exception thrown by one
+	 * of the encoders does not reach anybody: the packet is silently dropped and the game waits for
+	 * an answer that never arrives until RakNet times the connection out. Those are exactly the
+	 * failures that are worth a bug report, hence this handler. It is added last, which for
+	 * outbound messages means first: writes travel from the tail of the pipeline to its head, so
+	 * the handler sees the result of every encoder below it.
+	 */
+	private fun watchDroppedPackets(channel: Channel) {
+		val pipeline = channel.pipeline()
+		if (pipeline.get(DROPPED_PACKET_WATCHDOG) != null) return
+		pipeline.addLast(DROPPED_PACKET_WATCHDOG, object : ChannelOutboundHandlerAdapter() {
+			override fun write(ctx: ChannelHandlerContext, msg: Any, promise: ChannelPromise) {
+				if (!promise.isVoid) {
+					promise.addListener(ChannelFutureListener { future ->
+						if (future.isSuccess) {
+							// nothing to report
+						} else if (future.channel().isActive) {
+							logError("packet to the game could not be sent", future.cause())
+						} else {
+							// the session ended before the packet left: expected, not a defect
+							logInfo("packet to the game dropped, the connection is closed: ${future.cause()}")
+						}
+					})
+				}
+				ctx.write(msg, promise)
+			}
+		})
+	}
 
 	fun updateReliability() {
 		relay?.optionReliability = if (Settings.enableRakReliability.getValue(MyApplication.instance))

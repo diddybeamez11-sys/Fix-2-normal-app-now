@@ -1,0 +1,130 @@
+# End-to-end check of the relay, started by hand (Actions -> this workflow -> Run workflow).
+#
+# It installs the release APK on an emulator, drives the real UI the way a user does (pick the app,
+# Connect, open the overlay menu, Disconnect, Connect again) and then runs 16 consecutive
+# RakNet/Bedrock sessions through VPN -> netstack -> relay -> stub backend, each one completing the
+# NetworkSettings handshake and a compressed round trip. That is the path that used to lose about one
+# session in three before the compression codec swap was fixed.
+#
+# The APK is built from the committed app/libs/ProtoHax-1.4.0.jar, exactly like a local build - the jar
+# is rebuilt only by android.yml and nothing here touches it.
+name: Relay end-to-end check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  actions: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+      - name: Build the release APK from the committed ProtoHax jar
+        run: |
+          ls -l app/libs
+          chmod +x gradlew
+          ./gradlew app:assembleRelease --stacktrace --no-daemon
+      - run: |
+          mkdir -p "$RUNNER_TEMP/keep"
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/keep/"
+          cp app/build/outputs/mapping/release/mapping.txt "$RUNNER_TEMP/keep/" || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: apk-e2e
+          path: ${{ runner.temp }}/keep/*
+          overwrite: true
+
+  e2e:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: apk-e2e
+          path: apk
+      - uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet pillow scapy
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.23'
+          cache: false
+      - name: Build the RakNet test tools (stub backend for the host, client for the emulator)
+        working-directory: .github/e2e/rak
+        run: |
+          go mod init rakcheck
+          go get github.com/sandertv/go-raknet@latest
+          go mod tidy
+          go vet ./... || true
+          mkdir -p "$GITHUB_WORKSPACE/rak"
+          go build -o "$GITHUB_WORKSPACE/rak/rakserver" ./server
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$GITHUB_WORKSPACE/rak/rakclient" ./client
+          ls -l "$GITHUB_WORKSPACE/rak"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Drive the real UI on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          profile: pixel_5
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: python3 .github/e2e/e2e.py
+      - name: Map obfuscated names back
+        if: always()
+        continue-on-error: true
+        run: |
+          OUT="$GITHUB_WORKSPACE/diag-out"; mkdir -p "$OUT"
+          if [ -f apk/mapping.txt ] && [ -f "$OUT/11-e2e-logcat-filtered.txt" ]; then
+            python3 - "$OUT" <<'PY'
+          import re, sys
+          out = sys.argv[1]
+          m = {}
+          for line in open('apk/mapping.txt', errors='replace'):
+              if line[:1] not in ' \t#\n':
+                  mm = re.match(r'^(\S+) -> (\S+):\s*$', line)
+                  if mm: m[mm.group(2)] = mm.group(1)
+          tok = re.compile(r'[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$<>]+)+')
+          def sub(x):
+              t = x.group(0); p = t.split('.')
+              for k in range(len(p), 0, -1):
+                  c = '.'.join(p[:k])
+                  if c in m and m[c] != c:
+                      return '%s{=%s%s}' % (t, m[c], ('.' + '.'.join(p[k:])) if p[k:] else '')
+              return t
+          src = open(out + '/11-e2e-logcat-filtered.txt', errors='replace').read()
+          open(out + '/12-e2e-logcat-retraced.txt', 'w').write(tok.sub(sub, src))
+          PY
+          fi
+      - name: Post findings
+        if: always()
+        continue-on-error: true
+        run: python3 .github/e2e/post.py e2e "$GITHUB_WORKSPACE/diag-out/00-summary.txt" $(ls "$GITHUB_WORKSPACE"/diag-out/[0-9][0-9]-*.txt | sort)
