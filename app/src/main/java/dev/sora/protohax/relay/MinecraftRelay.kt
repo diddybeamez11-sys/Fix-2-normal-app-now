@@ -39,6 +39,7 @@ import io.netty.channel.ServerChannel
 import org.cloudburstmc.netty.channel.raknet.RakReliability
 import java.io.File
 import java.net.InetSocketAddress
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 
@@ -134,6 +135,7 @@ object MinecraftRelay {
             override fun onSessionCreation(session: MinecraftRelaySession): InetSocketAddress {
                 // add listeners
                 watchDroppedPackets(session.peer.channel)
+                closeServerConnectionGroup(session)
                 session.listeners.add(RelayListenerCompression(session))
                 session.listeners.add(RelayListenerAutoCodec(session))
                 this@MinecraftRelay.session.netSession = session
@@ -163,6 +165,24 @@ object MinecraftRelay {
             }
         })
     }
+
+	/**
+	 * Shuts the event loop group of the connection to the server down once the session is over.
+	 *
+	 * ProtoHax creates one NioEventLoopGroup per session for that connection (MinecraftRelay
+	 * .BedrockRelayInitializer.createSession0) and never shuts it down, so every join leaked about
+	 * three threads - they stayed parked for as long as the app was running. The group belongs to
+	 * this session alone; the group of the game connection is the one of the relay server and must
+	 * stay up, so only the former is terminated here.
+	 */
+	private fun closeServerConnectionGroup(session: MinecraftRelaySession) {
+		session.peer.channel.closeFuture().addListener(ChannelFutureListener {
+			val group = session.client?.peer?.channel?.eventLoop()?.parent()
+			if (group != null && !group.isShuttingDown) {
+				group.shutdownGracefully(200L, 3000L, TimeUnit.MILLISECONDS)
+			}
+		})
+	}
 
 	/**
 	 * Logs packets the netty pipeline of the game connection fails to encode or to send.

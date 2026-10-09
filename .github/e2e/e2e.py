@@ -359,9 +359,13 @@ def relay_test():
     time.sleep(5)
     threads_after = thread_count()
     log("ProtoHax process threads: before the %d relay sessions=%d after=%d" % (len(sessions), threads_before, threads_after))
+    per_session = (threads_after - threads_before) / float(len(sessions))
     open(os.path.join(OUT, "24-thread-counts.txt"), "w").write(
         "threads before: %d\nthreads after %d sessions: %d\n(difference per session: %.2f)\n" % (
-            threads_before, len(sessions), threads_after, (threads_after - threads_before) / float(len(sessions))))
+            threads_before, len(sessions), threads_after, per_session))
+    check("the relay does not leak threads per session (the event loop group of a session is shut down)",
+          per_session < 1.0, "%+.2f threads per session (%d -> %d over %d sessions)" % (
+              per_session, threads_before, threads_after, len(sessions)))
     ok = sum(results)
     check("relay sessions: all %d consecutive sessions got NetworkSettings back through the relay" % len(sessions),
           ok == len(sessions), "%d/%d ok: %s" % (ok, len(sessions), ["ok" if r else "STUCK" for r in results]))
