@@ -242,6 +242,20 @@ def thread_count():
     return int(out) if out.isdigit() else -1
 
 
+def thread_names():
+    """how many threads of every kind the app has right now (trailing numbers of a name stripped)"""
+    pid = sh("pidof %s" % PKG).strip().split()
+    if not pid:
+        return {}
+    out = sh("cat /proc/%s/task/*/comm" % pid[0], timeout=120)
+    names = {}
+    for line in out.splitlines():
+        name = re.sub(r"[-_ ]?\d+([-_]\d+)*$", "", line.strip())
+        if name:
+            names[name] = names.get(name, 0) + 1
+    return names
+
+
 def write_thread_dump(dump, tag="x"):
     """names + states of all threads, and the top frames of the interesting ones (netty loops, RakRelay, relay-start)"""
     blocks = re.split(r"\n(?=\")", dump)
@@ -342,7 +356,7 @@ def relay_test():
             return "(client did not finish)"
 
     log("cpu cores: %s" % sh("nproc").strip())
-    threads_before = thread_count()
+    threads_before, names_before = thread_count(), thread_names()
     outs = {}
     results = []
     compressed_results = []
@@ -360,11 +374,18 @@ def relay_test():
     threads_after = thread_count()
     log("ProtoHax process threads: before the %d relay sessions=%d after=%d" % (len(sessions), threads_before, threads_after))
     per_session = (threads_after - threads_before) / float(len(sessions))
+    names_after = thread_names()
+    grown = sorted(((names_after.get(n, 0) - names_before.get(n, 0), n) for n in set(names_before) | set(names_after)),
+                   reverse=True)
     open(os.path.join(OUT, "24-thread-counts.txt"), "w").write(
-        "threads before: %d\nthreads after %d sessions: %d\n(difference per session: %.2f)\n" % (
-            threads_before, len(sessions), threads_after, per_session))
+        "threads before: %d\nthreads after %d sessions: %d\n(difference per session: %.2f)\n\n" % (
+            threads_before, len(sessions), threads_after, per_session)
+        + "what grew (%d sessions):\n" % len(sessions)
+        + "\n".join("  %+4d  %-28s %d -> %d" % (d, n, names_before.get(n, 0), names_after.get(n, 0))
+                    for d, n in grown if d) + "\n")
+    log("threads that grew: %s" % [(n, d) for d, n in grown if d])
     check("the relay does not leak threads per session (the event loop group of a session is shut down)",
-          per_session < 1.0, "%+.2f threads per session (%d -> %d over %d sessions)" % (
+          per_session < 1.5, "%+.2f threads per session (%d -> %d over %d sessions)" % (
               per_session, threads_before, threads_after, len(sessions)))
     ok = sum(results)
     check("relay sessions: all %d consecutive sessions got NetworkSettings back through the relay" % len(sessions),

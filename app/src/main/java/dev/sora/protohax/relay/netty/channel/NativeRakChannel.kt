@@ -25,6 +25,8 @@ class NativeRakChannel(parent: Channel, private val rakConn: RakConn) : Abstract
 		it.targetAddress = InetSocketAddress(rakConn.localAddr, rakConn.localPort.toInt())
 	}
 
+	// read and written from both this channel's event loop (doBeginRead) and the read loop below
+	@Volatile
 	private var readPending = false
 	private val eventLoopRead = DefaultEventLoop()
 
@@ -94,6 +96,12 @@ class NativeRakChannel(parent: Channel, private val rakConn: RakConn) : Abstract
 				pipeline.fireExceptionCaught(t)
 				if (!rakConn.isOpen) {
 					pipeline.fireChannelInactive()
+					// Nothing else closes this channel: on the game side the RakNet session lives in
+					// the native library, so netty never learns that the connection ended. Without
+					// this close the close future never completes, doClose() never runs and every
+					// session left its read loop thread - and the event loop group the relay created
+					// for the connection to the server - behind for as long as the app ran.
+					close()
 				}
 				return@execute
 			}
