@@ -31,6 +31,10 @@
     @com.google.gson.annotations.SerializedName <fields>;
 }
 -keep class coelho.msftauth.api.** { *; }
+# AuthHttpClient.install() replaces ProtoHax's HTTP client through reflection on this field
+-keep class dev.sora.relay.utils.HttpUtils {
+    okhttp3.OkHttpClient client;
+}
 #-keep class dev.sora.** { *; }
 #-keep class org.cloudburstmc.** { *; }
 
