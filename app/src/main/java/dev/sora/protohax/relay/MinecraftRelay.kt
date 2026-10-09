@@ -134,10 +134,14 @@ object MinecraftRelay {
         return Relay(object : MinecraftRelayListener {
             override fun onSessionCreation(session: MinecraftRelaySession): InetSocketAddress {
                 // add listeners
-                watchDroppedPackets(session.peer.channel)
+                watchDroppedPackets(session.peer.channel, "the game")
                 closeServerConnectionGroup(session)
                 session.listeners.add(RelayListenerCompression(session))
                 session.listeners.add(RelayListenerAutoCodec(session))
+                // names the packets of the login stage - and, on the first packet of the server, puts
+                // the watchdog above on the connection to the server (that connection does not exist
+                // yet while this method runs, so it cannot be added here)
+                session.listeners.add(RelayListenerLoginTrace(session))
                 this@MinecraftRelay.session.netSession = session
                 session.listeners.add(this@MinecraftRelay.session)
 
@@ -185,16 +189,27 @@ object MinecraftRelay {
 	}
 
 	/**
-	 * Logs packets the netty pipeline of the game connection fails to encode or to send.
+	 * Logs packets the netty pipeline of a connection fails to encode or to send.
 	 *
-	 * `BedrockPeer.sendPacketImmediately` ignores the write promise, so an exception thrown by one
-	 * of the encoders does not reach anybody: the packet is silently dropped and the game waits for
-	 * an answer that never arrives until RakNet times the connection out. Those are exactly the
-	 * failures that are worth a bug report, hence this handler. It is added last, which for
-	 * outbound messages means first: writes travel from the tail of the pipeline to its head, so
-	 * the handler sees the result of every encoder below it.
+	 * `BedrockPeer.sendPacketImmediately` ignores the write promise and `BedrockPeer.flushPacketQueue`
+	 * drops the promise of every queued packet altogether (`channel.write(wrapper)` without looking at
+	 * the future), so an exception thrown by one of the encoders does not reach anybody: the packet is
+	 * silently dropped and the other side waits for an answer that never arrives until the connection
+	 * times out. The protocol library does report such a failure, but only through
+	 * `log.debug("Error encoding packet {}", ...)`, which a release build of this app threw away - and
+	 * the connection to the server had no watchdog at all. Those are exactly the failures that are worth
+	 * a bug report, hence this handler. It is added last, which for outbound messages means first:
+	 * writes travel from the tail of the pipeline to its head, so the handler sees the result of every
+	 * encoder below it.
+	 *
+	 * It also reports what the pipeline throws: netty passes an inbound decode failure to
+	 * `exceptionCaught` of the handler that failed and from there towards the tail, so a handler at the
+	 * tail sees it. (An outbound encoder failure does not travel that way - `MessageToMessageEncoder`
+	 * fails the write promise instead - which is why both are needed.)
+	 *
+	 * @param side how to name the connection in the log ("the game" / "the server")
 	 */
-	private fun watchDroppedPackets(channel: Channel) {
+	fun watchDroppedPackets(channel: Channel, side: String) {
 		val pipeline = channel.pipeline()
 		if (pipeline.get(DROPPED_PACKET_WATCHDOG) != null) return
 		pipeline.addLast(DROPPED_PACKET_WATCHDOG, object : ChannelOutboundHandlerAdapter() {
@@ -204,14 +219,19 @@ object MinecraftRelay {
 						if (future.isSuccess) {
 							// nothing to report
 						} else if (future.channel().isActive) {
-							logError("packet to the game could not be sent", future.cause())
+							logError("packet to $side could not be sent", future.cause())
 						} else {
 							// the session ended before the packet left: expected, not a defect
-							logInfo("packet to the game dropped, the connection is closed: ${future.cause()}")
+							logInfo("packet to $side dropped, the connection is closed: ${future.cause()}")
 						}
 					})
 				}
 				ctx.write(msg, promise)
+			}
+
+			override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
+				logError("the connection to $side hit a pipeline error (a packet it could not encode or decode)", cause)
+				ctx.fireExceptionCaught(cause)
 			}
 		})
 	}

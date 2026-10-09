@@ -6,8 +6,10 @@ Black-box test of the release APK on an emulator, driving the real UI the way th
 install -> pick the target app -> press Connect -> the floating icon must appear -> tap the icon -> the
 menu must open -> Disconnect -> Connect again. Then 16 consecutive RakNet/Bedrock sessions run through
 VPN -> netstack -> relay -> stub backend (NetworkSettings handshake plus a compressed round trip), which
-is the path that used to lose about one session in three. Every state is captured (screenshot, window
-list, logcat, packet capture, thread counts).
+is the path that used to lose about one session in three. The relay log is checked afterwards: the codec
+selection, the packets the login trace names in both directions, and that nothing was dropped on either
+connection - a real join that dies right after its Xbox login leaves exactly those lines behind.
+Every state is captured (screenshot, window list, logcat, packet capture, thread counts).
 
 Runs on the host inside android-emulator-runner (adb is on PATH, a device is booted).
 """
@@ -424,6 +426,17 @@ def relay_test():
           compressed_forwarded >= len(sessions), "%d compressed request(s) for %d sessions" % (compressed_forwarded, len(sessions)))
     dropped = logcat_lines(r"packet to the game could not be sent")
     check("relay log: no packet was dropped on the way to the game", not dropped, " | ".join(d[-150:] for d in dropped[:3]))
+    # the login stage has to stay readable: it is where a real join dies when something is wrong, and it
+    # used to leave nothing in the log between "login success" and the disconnect twenty seconds later
+    trace_out = logcat_lines(r"from the game: RequestNetworkSettingsPacket")
+    trace_in = logcat_lines(r"from the server: NetworkSettingsPacket")
+    check("relay log: the login trace named the packets of the game in every session",
+          len(trace_out) >= len(sessions), "%d traced packet(s) of the game" % len(trace_out))
+    check("relay log: the login trace named the packets of the server in every session",
+          len(trace_in) >= len(sessions), "%d traced packet(s) of the server" % len(trace_in))
+    dropped_server = logcat_lines(r"packet to the server could not be sent|hit a pipeline error")
+    check("relay log: no packet was dropped by the connection to the server", not dropped_server,
+          " | ".join(d[-150:] for d in dropped_server[:3]))
     check("no crash during the relay test", not logcat_lines(r"FATAL EXCEPTION|ANR in " + re.escape(PKG) + "|AndroidRuntime: Process: " + re.escape(PKG)))
 
 
