@@ -42,7 +42,17 @@ import javax.net.ssl.SSLPeerUnverifiedException
  *  2. [Mode.TLS12] - TLS 1.2 only, every enabled cipher suite. There is no TLS 1.3 part in that ClientHello
  *     (no supported_versions / key_share extension, no TLS 1.3 key exchange groups), which is what TLS
  *     terminators and middleboxes that cannot handle newer ClientHellos most often trip over,
- *  3. the same two without the HTTP proxy, if a system proxy (`http.proxyHost`) is set.
+ *  3. the same two without the HTTP proxy, if a system proxy (`http.proxyHost`) is set,
+ *  4. [Mode.DOH] / [Mode.DOH_TLS12] - the host's address looked up with DNS-over-HTTPS ([DohDns]) instead of
+ *     the phone's DNS, without a proxy.
+ *
+ * Mode 4 is the one most likely to help. Probed from a normal network (GitHub Actions, 2026-10-09), every one
+ * of these hosts accepts TLS 1.3 as well as TLS 1.2 with ECDHE-RSA-AES-GCM, which is exactly what the stock
+ * client offers. The xboxlive.com auth servers do not even answer a ClientHello they dislike with a
+ * `handshake_failure` alert: they reset the connection. So the alert in the report most likely did not come
+ * from Microsoft but from whatever the phone's DNS sent the connection to (a DNS filter's block page, a
+ * hijacking resolver, a proxy). The game itself is not affected because the VPN gives it 8.8.8.8 as its DNS
+ * server, while this app uses the phone's DNS (Private DNS, an ad-blocking DNS app, the carrier's resolver).
  *
  * Each of these is a separate connection, not OkHttp's built-in fallback: that one adds TLS_FALLBACK_SCSV,
  * which a TLS 1.3 server answers with `inappropriate_fallback`.
@@ -64,6 +74,8 @@ object AuthHttpClient {
 		TLS12("TLS 1.2 only, all enabled cipher suites"),
 		COMPATIBLE_DIRECT("TLS 1.3/1.2, all enabled cipher suites, no proxy"),
 		TLS12_DIRECT("TLS 1.2 only, all enabled cipher suites, no proxy"),
+		DOH("TLS 1.3/1.2, all enabled cipher suites, address from DNS-over-HTTPS, no proxy"),
+		DOH_TLS12("TLS 1.2 only, all enabled cipher suites, address from DNS-over-HTTPS, no proxy"),
 	}
 
 	private val systemProxy: Proxy = systemProxyConfig()
@@ -95,6 +107,8 @@ object AuthHttpClient {
 			put(Mode.COMPATIBLE_DIRECT, base.newBuilder().proxy(Proxy.NO_PROXY).connectionSpecs(listOf(compatibleSpec)).build())
 			put(Mode.TLS12_DIRECT, base.newBuilder().proxy(Proxy.NO_PROXY).connectionSpecs(listOf(tls12Spec)).build())
 		}
+		put(Mode.DOH, base.newBuilder().proxy(Proxy.NO_PROXY).dns(DohDns).connectionSpecs(listOf(compatibleSpec)).build())
+		put(Mode.DOH_TLS12, base.newBuilder().proxy(Proxy.NO_PROXY).dns(DohDns).connectionSpecs(listOf(tls12Spec)).build())
 	}
 
 	/** host -> the mode whose handshake that host accepted */
@@ -153,7 +167,9 @@ object AuthHttpClient {
 			val response = try {
 				clients.getValue(mode).newCall(request).execute()
 			} catch (e: IOException) {
-				if (!isRefusedHandshake(e)) {
+				// a DNS-over-HTTPS mode may also fail because no DoH server is reachable: just try the next mode
+				val usesDoh = mode == Mode.DOH || mode == Mode.DOH_TLS12
+				if (!isRefusedHandshake(e) && !usesDoh) {
 					// not a TLS problem (timeout, no network, DNS, ...): another ClientHello does not help
 					failures.forEach { e.addSuppressed(it.second) }
 					throw e
@@ -175,16 +191,17 @@ object AuthHttpClient {
 		}
 
 		// every ClientHello was refused: log what is needed to find out why, then fail like before
-		val last = failures.last().second
+		val primary = failures.firstOrNull { it.second is SSLException }?.second ?: failures.last().second
 		logError(
 			"TLS handshake with $host refused in all ${failures.size} modes. " +
-				"$host resolves to ${resolve(host)}, proxy: ${describe(systemProxy)}, " +
+				"The phone's DNS resolves $host to ${resolve(host)}, DNS-over-HTTPS to ${DohDns.describe(host)}, " +
+				"proxy: ${describe(systemProxy)}, " +
 				"Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}). " +
 				"A refusal of every ClientHello usually means the connection does not reach the real server: " +
 				"check Private DNS / ad-blocking DNS, other VPN or firewall apps and the network itself."
 		)
-		failures.dropLast(1).forEach { last.addSuppressed(it.second) }
-		throw last
+		failures.forEach { if (it.second !== primary) primary.addSuppressed(it.second) }
+		throw primary
 	}
 
 	/**
