@@ -44,6 +44,16 @@ any other repository being reachable:
   configured, if a `java.awt.Color` reference is left, if the OAuth fix is absent, or if the relay / login fixes
   above are not in the jar.
 
+## Xbox login HTTP client (app side)
+
+The jar's own HTTP client (`HttpUtils.client`, OkHttp with its default `MODERN_TLS` spec) is replaced at app start by
+`AuthHttpClient` (`app/src/main/java/dev/sora/protohax/relay/AuthHttpClient.kt`, through reflection - the field's
+name is kept in `proguard-rules.pro`). When a TLS handshake is refused
+(`SSLV3_ALERT_HANDSHAKE_FAILURE ... HANDSHAKE_FAILURE_ON_CLIENT_HELLO`), it retries the request with a broader cipher
+list, then TLS 1.2 only, then without the system proxy, and finally with the host's address resolved by
+DNS-over-HTTPS (`DohDns`: 1.1.1.1, 8.8.8.8, 223.5.5.5) instead of the phone's DNS. If everything is refused, the
+log names the addresses the phone's DNS and DNS-over-HTTPS returned.
+
 ## Rebuilding the jar
 
 GitHub Actions rebuilds ProtoHax from source at the pinned revision

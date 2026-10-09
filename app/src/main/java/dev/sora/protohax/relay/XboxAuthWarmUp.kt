@@ -25,7 +25,9 @@ import kotlin.concurrent.thread
  *  * a slow network ends in the game's own login timeout ("client disconnect: disconnect.lost"),
  *  * a request that fails - the reported session logged
  *    "login failed: javax.net.ssl.SSLHandshakeException ... SSLV3_ALERT_HANDSHAKE_FAILURE ...
- *    HANDSHAKE_FAILURE_ON_CLIENT_HELLO" - ends in a disconnect as well.
+ *    HANDSHAKE_FAILURE_ON_CLIENT_HELLO" - ends in a disconnect as well. (That failure turned out not to be a
+ *    hiccup: every attempt was refused the same way. [AuthHttpClient] handles it by changing the ClientHello
+ *    and, last, the DNS used to find the server.)
  *
  * Doing the same login here, as soon as the app or the VPN is started, means the Xbox identity token is
  * already in [tokenCacheFile] (the cache the relay reads too, and it is valid for about an hour) and the TLS
