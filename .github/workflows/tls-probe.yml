@@ -1,0 +1,19 @@
+name: TLS probe (temporary)
+on:
+  push:
+    branches: [arena/68ea4c8f-fix-2-normal-app-now]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: probe xbox live hosts
+        run: |
+          for h in user.auth.xboxlive.com device.auth.xboxlive.com sisu.xboxlive.com xsts.auth.xboxlive.com title.auth.xboxlive.com multiplayer.minecraft.net login.live.com; do
+            echo "=================== $h ($(getent hosts $h | head -1))"
+            for args in "" "-tls1_3" "-tls1_2" "-noservername" "-tls1_3 -groups X25519MLKEM768:X25519" "-tls1_3 -groups P-256" "-tls1_2 -cipher ECDHE-RSA-AES128-GCM-SHA256" "-tls1_2 -cipher ECDHE-ECDSA-AES128-GCM-SHA256" "-tls1_2 -cipher ECDHE-RSA-CHACHA20-POLY1305" "-tls1_2 -cipher AES128-GCM-SHA256" "-tls1_2 -sigalgs RSA-PSS+SHA256"; do
+              out=$(timeout 10 openssl s_client -connect $h:443 $( [ "$args" = "-noservername" ] || echo "-servername $h" ) $args </dev/null 2>&1)
+              res=$(echo "$out" | grep -E "^ *(Protocol|Cipher) *:|New, |alert|errno" | tr '\n' ' ' | head -c 300)
+              echo "[$args] $res"
+            done
+          done
+          openssl version
