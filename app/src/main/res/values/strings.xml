@@ -10,6 +10,7 @@
     <string name="overlay_start_failed">ProtoHax is running, but the in-game menu could not be shown: %1$s</string>
     <string name="overlay_hint">ProtoHax is running. Tap the floating ProtoHax icon to open the menu.</string>
     <string name="relay_start_failed">The in-game GUI is up, but the proxy failed to start: %1$s</string>
+    <string name="xbox_login_failed">Xbox login failed: %1$s</string>
     <string name="proxy_notification">%1$s is processing packets for %2$s</string>
 
     <string name="dashboard_more">More</string>

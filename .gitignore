@@ -4,3 +4,5 @@ local.properties
 .gradlesigning.jks
 
 signing.jks
+__pycache__/
+*.pyc

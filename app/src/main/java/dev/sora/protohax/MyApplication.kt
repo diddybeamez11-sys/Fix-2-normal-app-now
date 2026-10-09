@@ -2,6 +2,7 @@ package dev.sora.protohax
 
 import android.annotation.SuppressLint
 import android.app.Application
+import dev.sora.protohax.relay.XboxAuthWarmUp
 import dev.sora.protohax.relay.netty.log.NettyLoggerFactory
 import dev.sora.protohax.relay.service.AppService
 import dev.sora.protohax.ui.overlay.OverlayManager
@@ -17,6 +18,12 @@ class MyApplication : Application() {
 		density = resources.displayMetrics.density
 
         instance = this
+
+		// ProtoHax authenticates with Xbox Live inside the packet pipeline, when the game logs in. Doing the
+		// same login here - long before the game connects - means the first session of the day already finds
+		// the identity token in the cache and does not have to wait for (or fail at) the whole login. Failures
+		// are only logged here; the relay start reports them to the user (XboxAuthWarmUp.warmUp).
+		XboxAuthWarmUp.warmUp("app started", notifyUser = false)
     }
 
     companion object {

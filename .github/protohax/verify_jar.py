@@ -11,6 +11,12 @@ into the APK). Every check below corresponds to a real failure that happened or 
     block / item registry data of protocol 844 must exist (otherwise a 1.21.111 session silently uses the
     1.20.10 data of the mcpedata submodule).
   * no class may still reference java.awt.Color (Android has no java.awt).
+  * the relay's RakNet client GUID must be negative like the vanilla client's (go-raknet based servers - Dragonfly
+    and many community servers - silently ignore positive ones, so about every second connect would time out).
+  * the relay's inbound frame codec must create the BedrockBatchWrapper Cloudburst's CompressionCodec requires
+    (otherwise the very first packet of every connection fails with a ClassCastException).
+  * the Xbox login must retry a request that failed with a network / TLS error and must not claim a success for
+    a failed login (a single refused TLS handshake used to end the game session).
   * the Microsoft OAuth fix (authorization_code on first login, refresh_token afterwards) must be in the jar.
 
 usage: verify_jar.py <ProtoHax jar>
@@ -68,6 +74,25 @@ if b"Bedrock_v2193" in relay:
 session = raw("dev/sora/relay/game/GameSession.class")
 if b"1.21.111" not in session or b"1.26.50" in session:
     problems.append("GameSession.RECOMMENDED_VERSION is not 1.21.111")
+
+# 2b. the RakNet GUID of the relay's connection to the real server (Random.nextLong() or Long.MIN_VALUE
+#     compiles to this long constant)
+initializer = raw("dev/sora/relay/MinecraftRelay$BedrockRelayInitializer.class")
+if b"\x05\x80\x00\x00\x00\x00\x00\x00\x00" not in initializer:
+    problems.append("the relay's RakNet client GUID is not forced negative (go-raknet servers reject positive GUIDs)")
+
+# 2c. CustomFrameIdCodec.decode must emit a BedrockBatchWrapper (Cloudburst's CompressionCodec rejects a raw
+#     ByteBuf with a ClassCastException, so no packet of any connection could be decoded)
+frame_codec = raw("dev/sora/relay/session/CustomFrameIdCodec.class")
+if b"newInstance" not in frame_codec:
+    problems.append("CustomFrameIdCodec.decode does not create a BedrockBatchWrapper (every inbound packet would fail)")
+
+# 2d. the Xbox login robustness patch (retries, honest success log, kick message that names the reason)
+login_listener = raw("dev/sora/relay/session/listener/xbox/RelayListenerXboxLogin.class")
+for needle in (b"retryAuth", b"Xbox login failed: "):
+    if needle not in login_listener:
+        problems.append("the Xbox login robustness patch is missing: RelayListenerXboxLogin does not contain %s"
+                        % needle.decode())
 
 # 3. java.awt.Color must be gone, its replacement present
 if "dev/sora/relay/compat/Color.class" not in names:
