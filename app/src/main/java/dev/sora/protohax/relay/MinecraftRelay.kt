@@ -136,12 +136,12 @@ object MinecraftRelay {
                 // add listeners
                 watchDroppedPackets(session.peer.channel, "the game")
                 closeServerConnectionGroup(session)
+                // This must be first: NetworkSettings is consumed by RelayListenerCompression, which
+                // stops listener dispatch. Tracing first ensures that the server's initial packet is
+                // recorded and installs the server write watchdog before the game's Login is sent.
+                session.listeners.add(RelayListenerLoginTrace(session))
                 session.listeners.add(RelayListenerCompression(session))
                 session.listeners.add(RelayListenerAutoCodec(session))
-                // names the packets of the login stage - and, on the first packet of the server, puts
-                // the watchdog above on the connection to the server (that connection does not exist
-                // yet while this method runs, so it cannot be added here)
-                session.listeners.add(RelayListenerLoginTrace(session))
                 this@MinecraftRelay.session.netSession = session
                 session.listeners.add(this@MinecraftRelay.session)
 
