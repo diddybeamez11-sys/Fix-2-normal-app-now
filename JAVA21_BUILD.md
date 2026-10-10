@@ -8,8 +8,10 @@ This Android project is configured to build with JDK 21 and Gradle 8.7.
 (protocol 844) with the block, item and block-hardness registry data of that version, the Microsoft OAuth fix,
 the `java.awt.Color` stand-in the Cloudburst protocol classes need on Android, the two relay fixes that make a
 session work at all (a negative RakNet GUID and the `BedrockBatchWrapper` of the inbound frame codec), the
-Xbox login robustness patch (the login requests are retried, a failure is logged as a failure) and the login
-authentication type fix (protocol 818+ refuses a login without one). Both a local
+Xbox login robustness patch (the login requests are retried, a failure is logged as a failure), the login
+authentication type fix (protocol 818+ refuses a login without one) and the unlimited encoding settings a relay
+needs (the library's default limit of 1536 list entries is shorter than the 1889-entry item registry of
+1.21.111, so packet 162 was dropped and no item was ever visible in a joined session). Both a local
 build (`./gradlew app:assembleRelease`) and GitHub Actions package exactly this jar, so a local build is enough
 to get a client that can join 1.21.111 servers.
 
@@ -25,8 +27,8 @@ any other repository being reachable:
   runtime ids and the `block_hardness.json` that `MineUtils` reads are generated from it
   (`airId = 12530`, `minecraft:acacia_boat = 405` - the 1.20.10 data said 381);
 * `.github/protohax/apply_android_patches.py` targets the version (dashboard / RakNet pong version and the
-  registry data generation, validating the pinned data), and patches the two relay bugs the emulator relay test
-  of branch `arena/482c6c59` found:
+  registry data generation, validating the pinned data), and patches the relay bugs found on the way - the first
+  two by the emulator relay test of branch `arena/482c6c59`, the rest by the sessions that followed:
   * the RakNet client towards the real server uses a GUID whose sign bit is set. The vanilla client's GUID is
     always negative, and servers built on go-raknet (Dragonfly, many community servers) silently ignore
     OpenConnectionRequest2 of a positive GUID, so about every second connection attempt timed out;
@@ -42,6 +44,15 @@ any other repository being reachable:
     cannot encode a login without one, so every rewritten login was dropped with `Error whilst serializing
     LoginPacket` and never reached the server (the app-side `RelayListenerLoginAuthType` restores the same
     values for a jar that predates the fix);
+  * both codec helpers read without the protocol library's default size limits. Every helper starts with
+    `EncodingSettings.DEFAULT`, whose `maxListSize` is 1536, and the item registry of 1.21.111 has 1889
+    entries; since protocol 776 that registry travels in packet 162 instead of in `StartGamePacket`, so the
+    relay could not decode it and dropped it - the client's only source of item runtime ids, which left a
+    session that joined and rendered the world without a single visible item (`CraftingDataPacket` and
+    `CreativeContentPacket` went with it). `MinecraftRelaySession.setCodec` and its `client` setter now install
+    `EncodingSettings.UNLIMITED`, the profile the library documents for a proxy connection, because a codec
+    swap replaces the helper (the app-side `RelayListenerEncodingSettings` does the same for a jar that
+    predates the fix and after any later swap);
 * `.github/protohax/relocate_awt_color.py` points the `java.awt.Color` references of the Cloudburst protocol
   classes - Android has no `java.awt` - at the stand-in `dev.sora.relay.compat.Color` (`Color.java`), which the
   ProtoHax build compiles into the jar (Shadow's own `relocate` cannot be used: the pinned Shadow 8.0.0 bundles
