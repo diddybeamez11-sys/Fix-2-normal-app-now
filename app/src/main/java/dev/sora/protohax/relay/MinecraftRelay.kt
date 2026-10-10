@@ -162,6 +162,11 @@ object MinecraftRelay {
                     session.listeners.add(it)
                 }
 
+                // Must run after the encryptor above: the encryptor drops the authentication type when it
+                // rewrites the game's login packet, and this listener re-attaches it before the packet is
+                // forwarded to the server (protocol 818+ cannot encode a login without one).
+                session.listeners.add(RelayListenerLoginAuthType())
+
                 // resolve original ip and pass to relay client
                 val address = session.peer.channel.config().getOption(NativeRakConfig.RAK_NATIVE_TARGET_ADDRESS)
                 logInfo("SessionCreation $address")

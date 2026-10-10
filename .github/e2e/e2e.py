@@ -5,10 +5,11 @@ End-to-end check of the relay (see .github/workflows/e2e.yml).
 Black-box test of the release APK on an emulator, driving the real UI the way the user does:
 install -> pick the target app -> press Connect -> the floating icon must appear -> tap the icon -> the
 menu must open -> Disconnect -> Connect again. Then 16 consecutive RakNet/Bedrock sessions run through
-VPN -> netstack -> relay -> stub backend (NetworkSettings handshake plus a compressed round trip), which
-is the path that used to lose about one session in three. The relay log is checked afterwards: the codec
-selection, the packets the login trace names in both directions, and that nothing was dropped on either
-connection - a real join that dies right after its Xbox login leaves exactly those lines behind.
+VPN -> netstack -> relay -> stub backend (NetworkSettings handshake, a compressed round trip, plus a
+LoginPacket the relay re-signs), which is the path that used to lose about one session in three. The
+relay log is checked afterwards: the codec selection, the packets the login trace names in both
+directions, and that nothing was dropped on either connection - a real join that dies right after its
+Xbox login leaves exactly those lines behind.
 Every state is captured (screenshot, window list, logcat, packet capture, thread counts).
 
 Runs on the host inside android-emulator-runner (adb is on PATH, a device is booted).
@@ -290,7 +291,10 @@ def run_client(who, target, timeout=150):
 
 def relay_test():
     """a RakNet/Bedrock client under the target app's uid talks to a stub backend on the CI host THROUGH the VPN,
-    the netstack and the Java relay: RequestNetworkSettings(844) -> relay (codec selection) -> backend -> NetworkSettings"""
+    the netstack and the Java relay: RequestNetworkSettings(844) -> relay (codec selection) -> backend -> NetworkSettings,
+    then a compressed round trip, then a LoginPacket the relay re-signs (offline session encryption is on for this
+    test) and the backend answers. Without an authentication type the relay cannot encode the rewritten login
+    (protocol 818+) and the backend never sees it."""
     server_bin = os.path.join(WS, "rak", "rakserver")
     client_bin = os.path.join(WS, "rak", "rakclient")
     if not (os.path.exists(server_bin) and os.path.exists(client_bin)):
@@ -317,6 +321,9 @@ def relay_test():
     def got_compressed(out):
         return "CLIENT COMPRESSED RESULT: ok" in out
 
+    def got_login(out):
+        return "CLIENT LOGIN RESULT: ok" in out
+
     # control: no VPN involved (root is not tunnelled) - proves the emulator -> host path and the stub backend
     ctl = {}
     for port in (19132, 19133):
@@ -330,14 +337,26 @@ def relay_test():
     check("control: the test tools complete a compressed round trip without the relay (port 19132)",
           got_compressed(ctl[19132]), ctl[19132].strip()[-100:].replace("\n", " | "))
 
+    check("control: the test tools complete the login round trip without the relay (port 19132)",
+          got_login(ctl[19132]), ctl[19132].strip()[-100:].replace("\n", " | "))
+
     def count_req(path):
         return open(path).read().count("RequestNetworkSettings protocol=844")
 
     def count_compressed_req(path):
         return open(path).read().count("SERVER compressed RequestNetworkSettings protocol=844")
 
+    def count_login(path):
+        return open(path).read().count("SERVER LoginPacket protocol=844")
+
+    def count_resigned(path):
+        # the client claims FULL (authType=0); whatever the relay rewrote must be SELF_SIGNED (2)
+        return open(path).read().count("authType=2")
+
     base = {port: count_req(logs[port]) for port in (19132, 19133)}
     base_compressed = {port: count_compressed_req(logs[port]) for port in (19132, 19133)}
+    base_login = {port: count_login(logs[port]) for port in (19132, 19133)}
+    base_resigned = {port: count_resigned(logs[port]) for port in (19132, 19133)}
     who = "%d,%d,3003" % (TARGET_UID, TARGET_UID)
     dumps = []
 
@@ -365,6 +384,7 @@ def relay_test():
     outs = {}
     results = []
     compressed_results = []
+    login_results = []
     session_logs = []
     sessions = [19132, 19133] * 8
     for idx, port in enumerate(sessions, 1):
@@ -373,6 +393,7 @@ def relay_test():
         outs[port] = out
         results.append(got_settings(out))
         compressed_results.append(got_compressed(out))
+        login_results.append(got_login(out))
         session_logs.append("== relay session %d, port %d ==\n%s" % (idx, port, out.strip()))
         time.sleep(1)
     time.sleep(5)
@@ -397,6 +418,9 @@ def relay_test():
     okc = sum(compressed_results)
     check("relay sessions: all %d sessions also completed a compressed (zlib) round trip" % len(sessions),
           okc == len(sessions), "%d/%d ok: %s" % (okc, len(sessions), ["ok" if r else "NO" for r in compressed_results]))
+    okl = sum(login_results)
+    check("relay sessions: all %d sessions completed the login round trip through the relay" % len(sessions),
+          okl == len(sessions), "%d/%d ok: %s" % (okl, len(sessions), ["ok" if r else "NO" for r in login_results]))
     time.sleep(3)
     cap.terminate()
     subprocess.run("sudo pkill tcpdump", shell=True)
@@ -424,6 +448,12 @@ def relay_test():
     compressed_forwarded = sum(count_compressed_req(logs[p]) - base_compressed[p] for p in (19132, 19133))
     check("the backends received the compressed request the relay re-encoded in every session",
           compressed_forwarded >= len(sessions), "%d compressed request(s) for %d sessions" % (compressed_forwarded, len(sessions)))
+    forwarded_login = sum(count_login(logs[p]) - base_login[p] for p in (19132, 19133))
+    check("the backends received the LoginPacket the relay re-signed in every session",
+          forwarded_login >= len(sessions), "%d login(s) for %d sessions" % (forwarded_login, len(sessions)))
+    resigned = sum(count_resigned(logs[p]) - base_resigned[p] for p in (19132, 19133))
+    check("every forwarded login carries SELF_SIGNED (the relay rewrote and typed it)",
+          resigned >= len(sessions), "%d SELF_SIGNED login(s) for %d sessions" % (resigned, len(sessions)))
     dropped = logcat_lines(r"packet to the game could not be sent")
     check("relay log: no packet was dropped on the way to the game", not dropped, " | ".join(d[-150:] for d in dropped[:3]))
     # the login stage has to stay readable: it is where a real join dies when something is wrong, and it
@@ -471,8 +501,11 @@ def main():
     time.sleep(1)
     if rooted:
         uid = sh("stat -c %%u /data/data/%s" % PKG).strip()
+        # offline session encryption is on so the relay re-signs the LoginPacket of every test
+        # session (no account is configured); the login round trip then covers the rewritten login.
         prefs = ("<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n<map>\n"
-                 "    <string name=\"TARGET_PACKAGE\">%s</string>\n</map>\n" % TARGET)
+                 "    <string name=\"TARGET_PACKAGE\">%s</string>\n"
+                 "    <boolean name=\"OFFLINE_SESSION_ENCRYPTION\" value=\"true\" />\n</map>\n" % TARGET)
         open("/tmp/ProtoHax_Caches.xml", "w").write(prefs)
         adb("push", "/tmp/ProtoHax_Caches.xml", "/data/local/tmp/ProtoHax_Caches.xml")
         ctx = sh("ls -Zd /data/data/%s" % PKG).split()[0]          # incl. the per-app MCS categories

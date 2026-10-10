@@ -7,14 +7,22 @@
 //	phase 1  ->  RequestNetworkSettings(844)   uncompressed   must be answered with NetworkSettings
 //	phase 2  ->  RequestNetworkSettings(844)   zlib           must be answered with a zlib NetworkSettings
 //
+//	phase 3  ->  LoginPacket(844)              zlib           the relay re-signs it (offline session
+//	                                                                     encryption is on) and the backend answers
+//	                                                                     every login with a zlib NetworkSettings
+//
 // Phase 2 proves that the relay swapped the compression codec of both connections correctly: the answer of
-// phase 1 and the codec swap race each other inside the relay.
+// phase 1 and the codec swap race each other inside the relay. Phase 3 proves that the rewritten login
+// reaches the backend: without an authentication type the relay cannot encode it (protocol 818+) and the
+// backend never sees it.
 package main
 
 import (
 	"bytes"
 	"compress/flate"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -26,6 +34,7 @@ import (
 const (
 	idRequestNetworkSettings = 193
 	idNetworkSettings        = 143
+	idLogin                  = 1
 	compressionZlib          = 0x00
 	compressionNone          = 0xff
 )
@@ -88,6 +97,30 @@ func main() {
 		os.Exit(8)
 	}
 	fmt.Println("CLIENT COMPRESSED RESULT: ok")
+
+	// ---- phase 3: a LoginPacket must traverse the relay ----------------------------------
+	// The relay re-signs the login on its way to the server (offline session encryption is
+	// switched on for this test). Without an authentication type the relay cannot encode it
+	// and the backend never sees it, so the backend answers every login it receives and the
+	// client waits for that answer here.
+	time.Sleep(300 * time.Millisecond)
+	login := loginPacket()
+	if _, err := c.Write(login); err != nil {
+		fmt.Println("CLIENT LOGIN RESULT: write error:", err)
+		os.Exit(9)
+	}
+	fmt.Printf("CLIENT SENT LoginPacket(protocol 844): %d bytes\n", len(login))
+	reply, err = read(c, 20*time.Second)
+	if err != nil {
+		fmt.Println("CLIENT LOGIN RESULT:", err)
+		os.Exit(10)
+	}
+	fmt.Printf("CLIENT GOT %d login-reply bytes: %x\n", len(reply), reply)
+	if !hasNetworkSettings(reply, true) {
+		fmt.Println("CLIENT LOGIN RESULT: the reply is not a zlib NetworkSettings")
+		os.Exit(11)
+	}
+	fmt.Println("CLIENT LOGIN RESULT: ok")
 }
 
 func read(c conn, timeout time.Duration) ([]byte, error) {
@@ -120,6 +153,43 @@ func request(compressed bool) []byte {
 	if !compressed {
 		return append([]byte{0xFE}, batch...)
 	}
+	var deflated bytes.Buffer
+	w, _ := flate.NewWriter(&deflated, 7)
+	w.Write(batch)
+	w.Close()
+	return append([]byte{0xFE, compressionZlib}, deflated.Bytes()...)
+}
+
+// loginPacket builds a LoginPacket(844) game packet, compressed the way the relay expects after
+// the NetworkSettings handshake. The chain carries an extraData JWT like a real client login; the
+// relay re-signs it (offline session encryption) and must tag it with an authentication type,
+// otherwise it cannot encode the packet and the backend never sees it. The client claims FULL
+// authentication on purpose: whatever the backend receives must be SELF_SIGNED, which proves the
+// relay rewrote it. The JWT segments use padded base64: the relay decodes them with Java's
+// standard decoder, which rejects the unpadded form.
+func loginPacket() []byte {
+	chainJwt := "e30." + base64.URLEncoding.EncodeToString([]byte(
+		`{"extraData":{"displayName":"E2E","identity":"00000000-0000-0000-0000-000000000000"},`+
+			`"identityPublicKey":"ZTNK"}`)) + ".ZTJl"
+	chain, _ := json.Marshal(map[string][]string{"chain": {chainJwt}})
+	auth, _ := json.Marshal(map[string]any{
+		"AuthenticationType": 0,
+		"Certificate":        string(chain),
+		"Token":              "",
+	})
+	clientJwt := "e30." + base64.URLEncoding.EncodeToString([]byte(
+		`{"DeviceOS":1,"DeviceModel":"E2E","GameVersion":"1.21.111","ClientRandomId":1}`)) + ".ZTJl"
+
+	packet := binary.AppendUvarint(nil, idLogin)
+	packet = binary.BigEndian.AppendUint32(packet, 844)
+	packet = binary.AppendUvarint(packet, uint64(len(auth)+len(clientJwt)+8))
+	packet = binary.LittleEndian.AppendUint32(packet, uint32(len(auth)))
+	packet = append(packet, auth...)
+	packet = binary.LittleEndian.AppendUint32(packet, uint32(len(clientJwt)))
+	packet = append(packet, clientJwt...)
+
+	batch := binary.AppendUvarint(nil, uint64(len(packet)))
+	batch = append(batch, packet...)
 	var deflated bytes.Buffer
 	w, _ := flate.NewWriter(&deflated, 7)
 	w.Write(batch)

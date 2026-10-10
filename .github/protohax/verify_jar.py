@@ -17,6 +17,9 @@ into the APK). Every check below corresponds to a real failure that happened or 
     (otherwise the very first packet of every connection fails with a ClassCastException).
   * the Xbox login must retry a request that failed with a network / TLS error and must not claim a success for
     a failed login (a single refused TLS handshake used to end the game session).
+  * the rewritten login must carry an authentication type (protocol 818+ cannot encode a login without one,
+    so every rewritten login was dropped with "Error whilst serializing LoginPacket" and never reached the
+    server).
   * the Microsoft OAuth fix (authorization_code on first login, refresh_token afterwards) must be in the jar.
 
 usage: verify_jar.py <ProtoHax jar>
@@ -93,6 +96,18 @@ for needle in (b"retryAuth", b"Xbox login failed: "):
     if needle not in login_listener:
         problems.append("the Xbox login robustness patch is missing: RelayListenerXboxLogin does not contain %s"
                         % needle.decode())
+
+# 2e. the login authentication type fix (protocol 818+ refuses a login without one: the rewritten login
+#     could not be encoded - "Error whilst serializing LoginPacket" - and never reached the server)
+for needle in (b"data/auth/AuthType", b"FULL"):
+    if needle not in login_listener:
+        problems.append("the login auth type fix is missing: RelayListenerXboxLogin does not contain %s "
+                        "(the Xbox-authenticated chain must be tagged FULL)" % needle.decode())
+offline_listener = raw("dev/sora/relay/session/listener/RelayListenerEncryptedSession.class")
+for needle in (b"data/auth/AuthType", b"SELF_SIGNED"):
+    if needle not in offline_listener:
+        problems.append("the login auth type fix is missing: RelayListenerEncryptedSession does not contain %s "
+                        "(the offline self-signed chain must be tagged SELF_SIGNED)" % needle.decode())
 
 # 3. java.awt.Color must be gone, its replacement present
 if "dev/sora/relay/compat/Color.class" not in names:

@@ -69,6 +69,16 @@ usage: apply_android_patches.py <ProtoHax checkout> <pmmp/BedrockData checkout>
      * block_hardness.json                        <- block_properties_table.json (hardness per block)
    block_hardness.json is read by MineUtils but does not exist in any revision of the mcpedata submodule
    (without it MineUtils cannot initialise).
+
+7. Login authentication type (every login on protocol 818+ was dropped on its way to the server)
+   Since protocol 818 (Minecraft 1.21.90) the login serializer requires the auth payload to carry a
+   non-UNKNOWN AuthType ("Client requires non-null and non-UNKNOWN AuthType for login"); the protocol 844
+   codec inherits that serializer. Both session encryptors replace the game's auth payload with
+   CertificateChainPayload(chain), whose single-argument constructor leaves the type at UNKNOWN, so
+   BedrockCodec.tryEncode fails every rewritten login with "Error whilst serializing LoginPacket" and the
+   packet never reaches the server - the session dies right after "login success". The Xbox-authenticated
+   chain is now tagged FULL, the offline self-signed chain SELF_SIGNED (the Android-side
+   RelayListenerLoginAuthType restores the same values for a vendored jar that predates this fix).
 """
 import gzip
 import json
@@ -268,4 +278,22 @@ if len(hardness) < 1000 or hardness.get("minecraft:stone") is None:
 
 print("registry data for protocol %d (Minecraft %s) generated: %d block-state bytes, %d items, %d block hardness values"
       % (TARGET_PROTOCOL, version, len(palette), len(item_states), len(hardness)))
+
+# --- 7. login authentication type: protocol 818+ refuses a login without one ---------------------------
+# (This runs after step 5 on purpose: it matches the login block step 5 rewrote.)
+patch(src + "session/listener/xbox/RelayListenerXboxLogin.kt",
+      "import org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayload",
+      "import org.cloudburstmc.protocol.bedrock.data.auth.AuthType\n"
+      "import org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayload")
+patch(src + "session/listener/xbox/RelayListenerXboxLogin.kt",
+      "packet.authPayload = CertificateChainPayload(chain)",
+      "packet.authPayload = CertificateChainPayload(chain, AuthType.FULL)")
+patch(src + "session/listener/RelayListenerEncryptedSession.kt",
+      "import org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayload",
+      "import org.cloudburstmc.protocol.bedrock.data.auth.AuthType\n"
+      "import org.cloudburstmc.protocol.bedrock.data.auth.CertificateChainPayload")
+patch(src + "session/listener/RelayListenerEncryptedSession.kt",
+      "packet.authPayload = CertificateChainPayload(listOfNotNull(newChain))",
+      "packet.authPayload = CertificateChainPayload(listOfNotNull(newChain), AuthType.SELF_SIGNED)")
+
 print("ProtoHax Android patches applied")
