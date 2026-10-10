@@ -7,6 +7,7 @@ import club.fdpclient.club.script.ScriptManager
 import club.fdpclient.club.script.ScriptManagerFileSystem
 import dev.sora.protohax.MyApplication
 import dev.sora.protohax.relay.modules.ModuleESP
+import dev.sora.protohax.relay.modules.ModuleMotionFly
 import dev.sora.protohax.relay.netty.channel.NativeRakConfig
 import dev.sora.protohax.relay.netty.channel.NativeRakServerChannel
 import dev.sora.protohax.relay.service.AppService
@@ -128,6 +129,7 @@ object MinecraftRelay {
 
     private fun registerAdditionalModules(moduleManager: ModuleManager) {
 		moduleManager.registerModule(ModuleESP())
+		moduleManager.registerModule(ModuleMotionFly())
 	}
 
     private fun constructRelay(): Relay {
