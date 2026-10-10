@@ -8,12 +8,20 @@
 //	        ... both sides switch to zlib ...
 //	client -> RequestNetworkSettings(844)            compressed batch    FE 00 <raw deflate>
 //	server -> NetworkSettings(zlib)                  compressed batch    FE 00 <raw deflate>
+//
+//	client -> LoginPacket(844)                       compressed batch    FE 00 <raw deflate>
+//	server -> NetworkSettings(zlib)                  compressed batch    FE 00 <raw deflate>
+//
+// Every login it receives is logged with its protocol, AuthenticationType and chain length: the
+// relay re-signs the login (offline session encryption is on) and must tag it SELF_SIGNED, so a
+// login that arrives answers what the relay did to it.
 package main
 
 import (
 	"bytes"
 	"compress/flate"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,6 +35,7 @@ import (
 const (
 	idRequestNetworkSettings = 193
 	idNetworkSettings        = 143
+	idLogin                  = 1
 	compressionZlib          = 0x00
 	compressionNone          = 0xff
 )
@@ -81,6 +90,21 @@ func handle(c net.Conn) {
 		}
 		for _, packet := range batch {
 			id, body := packetID(packet)
+			if id == idLogin {
+				protocol, authType, chainLen := parseLogin(body)
+				fmt.Printf("SERVER LoginPacket protocol=%d authType=%d chain=%d\n", protocol, authType, chainLen)
+				out, err := batchOf(networkSettings(), compressed)
+				if err != nil {
+					fmt.Println("SERVER cannot build batch:", err)
+					return
+				}
+				if _, err := c.Write(out); err != nil {
+					fmt.Println("SERVER write error:", err)
+					return
+				}
+				fmt.Printf("SERVER sent NetworkSettings for the login (compressed %v): %x\n", compressed, trim(out))
+				continue
+			}
 			if id != idRequestNetworkSettings {
 				fmt.Printf("SERVER packet id=%d len=%d\n", id, len(packet))
 				continue
@@ -95,10 +119,7 @@ func handle(c net.Conn) {
 			} else {
 				fmt.Printf("SERVER RequestNetworkSettings protocol=%d\n", protocol)
 			}
-			// NetworkSettings: compression threshold u16 LE, algorithm u16 LE (0 = zlib),
-			// client throttle bool, threshold byte, scalar float32 LE
-			settings := []byte{0x8F, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-			out, err := batchOf(settings, compressed)
+			out, err := batchOf(networkSettings(), compressed)
 			if err != nil {
 				fmt.Println("SERVER cannot build batch:", err)
 				return
@@ -172,6 +193,52 @@ func batchOf(packet []byte, compressed bool) ([]byte, error) {
 		return nil, err
 	}
 	return append([]byte{0xFE, compressionZlib}, deflated.Bytes()...), nil
+}
+
+// networkSettings is the body of the NetworkSettings reply: compression threshold u16 LE,
+// algorithm u16 LE (0 = zlib), client throttle bool, threshold byte, scalar float32 LE.
+func networkSettings() []byte {
+	return []byte{0x8F, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+}
+
+// parseLogin reads the protocol, the AuthenticationType and the chain length from a LoginPacket
+// body. Anything it cannot read stays -1, so a malformed login fails the test loudly instead of
+// passing silently.
+func parseLogin(body []byte) (protocol uint32, authType int, chainLen int) {
+	protocol, authType, chainLen = 0, -1, -1
+	if len(body) < 4 {
+		return
+	}
+	protocol = binary.BigEndian.Uint32(body[:4])
+	rest := body[4:]
+	total, read := binary.Uvarint(rest)
+	if read <= 0 || uint64(len(rest)-read) < total {
+		return
+	}
+	rest = rest[read : read+int(total)]
+	if len(rest) < 4 {
+		return
+	}
+	authLen := int(binary.LittleEndian.Uint32(rest[:4]))
+	if len(rest) < 4+authLen {
+		return
+	}
+	var auth struct {
+		AuthenticationType int    `json:"AuthenticationType"`
+		Certificate        string `json:"Certificate"`
+	}
+	if err := json.Unmarshal(rest[4:4+authLen], &auth); err != nil {
+		return
+	}
+	authType = auth.AuthenticationType
+	var cert struct {
+		Chain []string `json:"chain"`
+	}
+	if err := json.Unmarshal([]byte(auth.Certificate), &cert); err != nil {
+		return
+	}
+	chainLen = len(cert.Chain)
+	return
 }
 
 // packetID reads the packet header (varint: id | sender << 10 | target << 12).
