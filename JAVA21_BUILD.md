@@ -7,8 +7,9 @@ This Android project is configured to build with JDK 21 and Gradle 8.7.
 `app/libs/ProtoHax-1.4.0.jar` is the fully adapted ProtoHax library: Minecraft Bedrock 1.21.111
 (protocol 844) with the block, item and block-hardness registry data of that version, the Microsoft OAuth fix,
 the `java.awt.Color` stand-in the Cloudburst protocol classes need on Android, the two relay fixes that make a
-session work at all (a negative RakNet GUID and the `BedrockBatchWrapper` of the inbound frame codec) and the
-Xbox login robustness patch (the login requests are retried, a failure is logged as a failure). Both a local
+session work at all (a negative RakNet GUID and the `BedrockBatchWrapper` of the inbound frame codec), the
+Xbox login robustness patch (the login requests are retried, a failure is logged as a failure) and the login
+authentication type fix (protocol 818+ refuses a login without one). Both a local
 build (`./gradlew app:assembleRelease`) and GitHub Actions package exactly this jar, so a local build is enough
 to get a client that can join 1.21.111 servers.
 
@@ -36,6 +37,11 @@ any other repository being reachable:
   * the Xbox login of `RelayListenerXboxLogin` retries the identity token and chain requests (a single refused
     TLS handshake used to end the game session), logs `login success` only for a login that really succeeded,
     and does not forward a login packet it could not sign (the kick message names the reason);
+  * the rewritten login carries an authentication type: `RelayListenerXboxLogin` tags its Xbox-authenticated
+    chain `FULL`, `RelayListenerEncryptedSession` its offline self-signed chain `SELF_SIGNED`. Protocol 818+
+    cannot encode a login without one, so every rewritten login was dropped with `Error whilst serializing
+    LoginPacket` and never reached the server (the app-side `RelayListenerLoginAuthType` restores the same
+    values for a jar that predates the fix);
 * `.github/protohax/relocate_awt_color.py` points the `java.awt.Color` references of the Cloudburst protocol
   classes - Android has no `java.awt` - at the stand-in `dev.sora.relay.compat.Color` (`Color.java`), which the
   ProtoHax build compiles into the jar (Shadow's own `relocate` cannot be used: the pinned Shadow 8.0.0 bundles
