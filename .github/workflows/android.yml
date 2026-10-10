@@ -418,10 +418,24 @@ jobs:
       # ---------------------------------------------------------
       - name: Build release APK
         run: |
-          ./gradlew \
-            app:assembleRelease \
-            --stacktrace \
-            --no-daemon
+          set -o pipefail
+          if ./gradlew app:assembleRelease --stacktrace --no-daemon 2>&1 | tee "$RUNNER_TEMP/android-build.log"; then
+            echo "Release APK built successfully."
+          else
+            # Expose compiler errors as check annotations even if the Actions log
+            # download endpoint is unavailable to the PR author.
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          log = Path(__import__('os').environ['RUNNER_TEMP'], 'android-build.log').read_text(errors='replace')
+          errors = [line for line in log.splitlines() if re.search(r'^e: |^.*\.kt:\d+:\d+:|^> Task .* FAILED|^FAILURE:|^Execution failed for task|^\* What went wrong:', line)]
+          for line in (errors[:25] or log.splitlines()[-25:]):
+              line = line.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print(f'::error title=Android build failure::{line[:1500]}')
+          PY
+            exit 1
+          fi
 
       # ---------------------------------------------------------
       # Verify APK
