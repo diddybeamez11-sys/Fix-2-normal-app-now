@@ -3,8 +3,10 @@
 # It installs the release APK on an emulator, drives the real UI the way a user does (pick the app,
 # Connect, open the overlay menu, Disconnect, Connect again) and then runs 16 consecutive
 # RakNet/Bedrock sessions through VPN -> netstack -> relay -> stub backend, each one completing the
-# NetworkSettings handshake, a compressed round trip and a LoginPacket the relay re-signs. That is
-# the path that used to lose about one session in three before the compression codec swap was fixed.
+# NetworkSettings handshake, a compressed round trip, a LoginPacket the relay re-signs and the item
+# registry the backend sends after that login. That is the path that used to lose about one session in
+# three before the compression codec swap was fixed - and that dropped every packet whose list is longer
+# than the 1536 entries a codec helper reads by default, which is why no item was ever visible in game.
 #
 # The APK is built from the committed app/libs/ProtoHax-1.4.0.jar, exactly like a local build - the jar
 # is rebuilt only by android.yml and nothing here touches it.

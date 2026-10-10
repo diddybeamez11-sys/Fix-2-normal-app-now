@@ -79,6 +79,25 @@ usage: apply_android_patches.py <ProtoHax checkout> <pmmp/BedrockData checkout>
    packet never reaches the server - the session dies right after "login success". The Xbox-authenticated
    chain is now tagged FULL, the offline self-signed chain SELF_SIGNED (the Android-side
    RelayListenerLoginAuthType restores the same values for a vendored jar that predates this fix).
+
+8. Encoding limits (no item was ever visible: the item registry packet was dropped for being too long)
+   Every codec helper starts with EncodingSettings.DEFAULT, whose maxListSize is 1536, and every readArray
+   of the helper refuses a longer list ("Tried to read %s bytes but maximum is %s"). The item registry of
+   Minecraft 1.21.111 has 1889 entries (required_item_list.json of step 6 is that list), and since protocol
+   776 it travels in a packet of its own - id 162, ItemRegistryPacket in Mojang's documentation, still
+   ItemComponentPacket here - because StartGameSerializer_v776 reads and writes the item definitions of
+   StartGamePacket as a no-op. The relay could not decode that packet and dropped it, so the game never
+   learned a single item runtime id: the session joined, the world rendered (block network ids are hashed
+   and a chunk palette carries its own), and every item stack - inventory, hand, item entity on the ground -
+   resolved to nothing. The server kept the real inventory, so a totem of undying still popped on a fatal
+   fall the player could not see. CraftingDataPacket (every recipe of the game) and CreativeContentPacket
+   are dropped by the same limit. Both connections now use EncodingSettings.UNLIMITED, the profile the
+   library documents for this position ("e.g. Proxy server client <-> downstream server connection"): a
+   relay forwards what the server sends, so a limit it enforces is a packet it loses. The settings live in
+   the helper and BedrockPacketCodec.setCodec replaces it with a fresh one, so they are re-applied wherever
+   a helper is installed - MinecraftRelaySession.setCodec (RelayListenerAutoCodec swaps the codec twice per
+   session) and the client setter (the Android-side RelayListenerEncodingSettings does the same for a
+   vendored jar that predates this fix, and after any later swap).
 """
 import gzip
 import json
@@ -295,5 +314,64 @@ patch(src + "session/listener/RelayListenerEncryptedSession.kt",
 patch(src + "session/listener/RelayListenerEncryptedSession.kt",
       "packet.authPayload = CertificateChainPayload(listOfNotNull(newChain))",
       "packet.authPayload = CertificateChainPayload(listOfNotNull(newChain), AuthType.SELF_SIGNED)")
+
+# --- 8. encoding limits: the item registry of 1.21.111 is longer than a codec helper is allowed to read --
+# A relay has to forward what the server sends; EncodingSettings is the library's own knob for that, and its
+# documentation names this exact position ("e.g. Proxy server client <-> downstream server connection").
+session_file = src + "session/MinecraftRelaySession.kt"
+patch(session_file,
+      "import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec\n",
+      "import org.cloudburstmc.protocol.bedrock.codec.BedrockCodec\n"
+      "import org.cloudburstmc.protocol.bedrock.data.EncodingSettings\n")
+# the server-facing session is created after the game-facing one and gets a fresh helper from `it.codec = codec`;
+# inside the setter `client` still holds the old value, so the new helper has to be reached through `it`.
+patch(session_file,
+      "\t\t\t\tit.peer.codecHelper.itemDefinitions = peer.codecHelper.itemDefinitions\n",
+      "\t\t\t\tit.peer.codecHelper.itemDefinitions = peer.codecHelper.itemDefinitions\n"
+      "\t\t\t\t// `it.codec = codec` above installed a fresh helper, and a fresh helper carries the library's\n"
+      "\t\t\t\t// default read limits again (see unlimitedEncodingSettings)\n"
+      "\t\t\t\tit.peer.codecHelper.encodingSettings = EncodingSettings.UNLIMITED\n")
+# every codec swap (RelayListenerAutoCodec: on the game's RequestNetworkSettingsPacket and on its LoginPacket)
+# replaces the helper of both peers, so the profile has to be re-applied here.
+patch(session_file,
+      "    override fun setCodec(codec: BedrockCodec) {\n"
+      "        client?.codec = codec\n"
+      "        super.setCodec(codec)\n"
+      "    }\n",
+      "    override fun setCodec(codec: BedrockCodec) {\n"
+      "        client?.codec = codec\n"
+      "        super.setCodec(codec)\n"
+      "        // both peers just got a fresh codec helper, and a fresh helper carries the library's default\n"
+      "        // read limits again\n"
+      "        unlimitedEncodingSettings()\n"
+      "    }\n"
+      "\n"
+      "    /**\n"
+      "     * Removes the protocol library's read limits from the codec helper of both connections.\n"
+      "     *\n"
+      "     * Every helper starts with `EncodingSettings.DEFAULT`, whose `maxListSize` is 1536, and every\n"
+      "     * `readArray` of the helper refuses a longer list (\"Tried to read %s bytes but maximum is %s\").\n"
+      "     * The item registry of Minecraft 1.21.111 has 1889 entries and since protocol 776 it travels in a\n"
+      "     * packet of its own (id 162, `ItemComponentPacket` here, `ItemRegistryPacket` in Mojang's protocol\n"
+      "     * documentation) instead of in `StartGamePacket`, whose item definitions `StartGameSerializer_v776`\n"
+      "     * reads and writes as a no-op. That packet therefore could not be decoded and was dropped, and a\n"
+      "     * client that never receives it cannot resolve a single item runtime id: the session joined, the\n"
+      "     * world rendered (block network ids are hashed and a chunk palette carries the ids it uses), and no\n"
+      "     * item was ever visible - not in the inventory the server had, not in a hand, not on the ground.\n"
+      "     * `CraftingDataPacket` (every recipe of the game) and `CreativeContentPacket` are dropped by the\n"
+      "     * same limit.\n"
+      "     *\n"
+      "     * `EncodingSettings.UNLIMITED` is the profile the library documents for this position (\"e.g. Proxy\n"
+      "     * server client <-> downstream server connection\"): a relay forwards what the server sends, so a\n"
+      "     * limit it enforces is a packet it loses. The limits only guard reads, the write side is unchanged.\n"
+      "     *\n"
+      "     * Called from here and from the `client` setter because `BedrockPacketCodec.setCodec` replaces the\n"
+      "     * helper (`this.helper = codec.createHelper()`), and `RelayListenerAutoCodec` swaps the codec twice\n"
+      "     * per session - on the game's `RequestNetworkSettingsPacket` and on its `LoginPacket`.\n"
+      "     */\n"
+      "    private fun unlimitedEncodingSettings() {\n"
+      "        peer.codecHelper.encodingSettings = EncodingSettings.UNLIMITED\n"
+      "        client?.peer?.codecHelper?.encodingSettings = EncodingSettings.UNLIMITED\n"
+      "    }\n")
 
 print("ProtoHax Android patches applied")

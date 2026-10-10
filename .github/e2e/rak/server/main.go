@@ -11,10 +11,17 @@
 //
 //	client -> LoginPacket(844)                       compressed batch    FE 00 <raw deflate>
 //	server -> NetworkSettings(zlib)                  compressed batch    FE 00 <raw deflate>
+//	server -> ItemRegistry(162, 1600 entries)        compressed batch    FE 00 <raw deflate>
 //
 // Every login it receives is logged with its protocol, AuthenticationType and chain length: the
 // relay re-signs the login (offline session encryption is on) and must tag it SELF_SIGNED, so a
 // login that arrives answers what the relay did to it.
+//
+// The item registry that follows every login is the packet a real server sends right after it: since
+// protocol 776 the client learns its item runtime ids from packet 162 alone (StartGamePacket no longer
+// carries them), and the list of Minecraft 1.21.111 has 1889 entries - more than the 1536 a codec
+// helper reads by default (EncodingSettings.DEFAULT.maxListSize). A relay with those limits cannot
+// decode the packet and drops it: the game joins, the world renders, and not one item is ever visible.
 package main
 
 import (
@@ -36,8 +43,14 @@ const (
 	idRequestNetworkSettings = 193
 	idNetworkSettings        = 143
 	idLogin                  = 1
+	idItemRegistry           = 162
 	compressionZlib          = 0x00
 	compressionNone          = 0xff
+
+	// itemRegistryEntries is above EncodingSettings.DEFAULT.maxListSize (1536) - the limit a codec helper
+	// reads with unless the relay lifts it - and stands in for the 1889 entries of the real 1.21.111
+	// registry, which this stub does not have to reproduce in full to trip the same check.
+	itemRegistryEntries = 1600
 )
 
 func main() {
@@ -103,6 +116,18 @@ func handle(c net.Conn) {
 					return
 				}
 				fmt.Printf("SERVER sent NetworkSettings for the login (compressed %v): %x\n", compressed, trim(out))
+				// what a real server sends right after the login: the registry the client needs to
+				// resolve an item runtime id, longer than a codec helper reads by default
+				out, err = batchOf(itemRegistry(itemRegistryEntries), true)
+				if err != nil {
+					fmt.Println("SERVER cannot build the item registry batch:", err)
+					return
+				}
+				if _, err := c.Write(out); err != nil {
+					fmt.Println("SERVER write error:", err)
+					return
+				}
+				fmt.Printf("SERVER sent ItemRegistry(%d entries): %d bytes compressed\n", itemRegistryEntries, len(out))
 				continue
 			}
 			if id != idRequestNetworkSettings {
@@ -199,6 +224,33 @@ func batchOf(packet []byte, compressed bool) ([]byte, error) {
 // algorithm u16 LE (0 = zlib), client throttle bool, threshold byte, scalar float32 LE.
 func networkSettings() []byte {
 	return []byte{0x8F, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+}
+
+// itemRegistry builds the packet that carries the item registry: id 162, ItemComponentPacket in the
+// protocol library, ItemRegistryPacket in Mojang's documentation, laid out the way
+// ItemComponentSerializer_v776 reads it:
+//
+//	varint count
+//	count x { string identifier | uint16 LE runtimeId | bool componentBased | zigzag varint version | network NBT }
+//
+// The entries are placeholders - what the relay has to survive is the length of the list, not its
+// content. The component data is an empty unnamed compound (tag type, name length 0, TAG_End), which is
+// what the library writes for an item without components.
+func itemRegistry(entries int) []byte {
+	packet := binary.AppendUvarint(nil, idItemRegistry)
+	packet = binary.AppendUvarint(packet, uint64(entries))
+	var runtimeID [2]byte
+	for i := 0; i < entries; i++ {
+		name := fmt.Sprintf("minecraft:e2e_item_%04d", i)
+		packet = binary.AppendUvarint(packet, uint64(len(name)))
+		packet = append(packet, name...)
+		binary.LittleEndian.PutUint16(runtimeID[:], uint16(i+1))
+		packet = append(packet, runtimeID[:]...)
+		packet = append(packet, 0x00)             // componentBased = false
+		packet = append(packet, 0x00)             // ItemVersion ordinal 0 (LEGACY), zigzag varint
+		packet = append(packet, 0x0a, 0x00, 0x00) // empty unnamed compound
+	}
+	return packet
 }
 
 // parseLogin reads the protocol, the AuthenticationType and the chain length from a LoginPacket

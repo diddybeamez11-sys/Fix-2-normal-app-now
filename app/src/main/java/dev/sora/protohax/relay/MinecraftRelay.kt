@@ -167,6 +167,19 @@ object MinecraftRelay {
                 // forwarded to the server (protocol 818+ cannot encode a login without one).
                 session.listeners.add(RelayListenerLoginAuthType())
 
+                // Must run after RelayListenerAutoCodec above, which swaps the codec on the game's
+                // RequestNetworkSettings and Login packets: a swap installs a fresh codec helper, and a
+                // fresh helper carries the library's default read limits again (maxListSize 1536). The item
+                // registry of Minecraft 1.21.111 has 1889 entries, so with those limits the relay cannot
+                // decode packet 162 - the packet that since protocol 776 is the only source of the client's
+                // item ids - and drops it: the game joins, the world renders, and not a single item is ever
+                // visible. This listener re-installs the unlimited profile the library provides for proxies
+                // after every swap; installing it once here covers the helpers that exist already.
+                RelayListenerEncodingSettings(session).also {
+                    it.install()
+                    session.listeners.add(it)
+                }
+
                 // resolve original ip and pass to relay client
                 val address = session.peer.channel.config().getOption(NativeRakConfig.RAK_NATIVE_TARGET_ADDRESS)
                 logInfo("SessionCreation $address")

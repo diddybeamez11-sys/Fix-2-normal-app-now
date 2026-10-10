@@ -20,6 +20,9 @@ into the APK). Every check below corresponds to a real failure that happened or 
   * the rewritten login must carry an authentication type (protocol 818+ cannot encode a login without one,
     so every rewritten login was dropped with "Error whilst serializing LoginPacket" and never reached the
     server).
+  * both codec helpers must read without the library's default size limits (EncodingSettings.DEFAULT caps a
+    list at 1536 entries, the item registry of 1.21.111 has 1889: packet 162 was dropped, the client never
+    learned an item id and no item was ever visible).
   * the Microsoft OAuth fix (authorization_code on first login, refresh_token afterwards) must be in the jar.
 
 usage: verify_jar.py <ProtoHax jar>
@@ -108,6 +111,17 @@ for needle in (b"data/auth/AuthType", b"SELF_SIGNED"):
     if needle not in offline_listener:
         problems.append("the login auth type fix is missing: RelayListenerEncryptedSession does not contain %s "
                         "(the offline self-signed chain must be tagged SELF_SIGNED)" % needle.decode())
+
+# 2f. the encoding limits fix (EncodingSettings.DEFAULT caps every list a codec helper reads at 1536
+#     entries; the item registry of Minecraft 1.21.111 has 1889, so packet 162 - the only source of the
+#     client's item runtime ids since protocol 776 - could not be decoded and was dropped: a session that
+#     joins, renders the world and never shows a single item, while the server keeps the real inventory)
+relay_session = raw("dev/sora/relay/session/MinecraftRelaySession.class")
+for needle in (b"data/EncodingSettings", b"UNLIMITED"):
+    if needle not in relay_session:
+        problems.append("the encoding limits fix is missing: MinecraftRelaySession does not contain %s "
+                        "(both codec helpers must be switched to EncodingSettings.UNLIMITED whenever a "
+                        "codec swap installs a fresh one)" % needle.decode())
 
 # 3. java.awt.Color must be gone, its replacement present
 if "dev/sora/relay/compat/Color.class" not in names:

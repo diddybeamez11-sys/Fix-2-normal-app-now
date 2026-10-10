@@ -5,11 +5,13 @@ End-to-end check of the relay (see .github/workflows/e2e.yml).
 Black-box test of the release APK on an emulator, driving the real UI the way the user does:
 install -> pick the target app -> press Connect -> the floating icon must appear -> tap the icon -> the
 menu must open -> Disconnect -> Connect again. Then 16 consecutive RakNet/Bedrock sessions run through
-VPN -> netstack -> relay -> stub backend (NetworkSettings handshake, a compressed round trip, plus a
-LoginPacket the relay re-signs), which is the path that used to lose about one session in three. The
+VPN -> netstack -> relay -> stub backend (NetworkSettings handshake, a compressed round trip, a
+LoginPacket the relay re-signs, plus the item registry packet the backend sends after that login), which
+is the path that used to lose about one session in three - and that lost every packet whose list is
+longer than the 1536 entries a codec helper reads by default, which is why no item was ever visible. The
 relay log is checked afterwards: the codec selection, the packets the login trace names in both
-directions, and that nothing was dropped on either connection - a real join that dies right after its
-Xbox login leaves exactly those lines behind.
+directions, and that nothing was dropped or failed to decode on either connection - a real join that dies
+right after its Xbox login leaves exactly those lines behind.
 Every state is captured (screenshot, window list, logcat, packet capture, thread counts).
 
 Runs on the host inside android-emulator-runner (adb is on PATH, a device is booted).
@@ -293,8 +295,10 @@ def relay_test():
     """a RakNet/Bedrock client under the target app's uid talks to a stub backend on the CI host THROUGH the VPN,
     the netstack and the Java relay: RequestNetworkSettings(844) -> relay (codec selection) -> backend -> NetworkSettings,
     then a compressed round trip, then a LoginPacket the relay re-signs (offline session encryption is on for this
-    test) and the backend answers. Without an authentication type the relay cannot encode the rewritten login
-    (protocol 818+) and the backend never sees it."""
+    test) and the backend answers, then the item registry the backend sends after that login. Without an
+    authentication type the relay cannot encode the rewritten login (protocol 818+) and the backend never sees it;
+    without EncodingSettings.UNLIMITED on its codec helpers the relay cannot decode the registry (1600 entries in
+    the test, 1889 in Minecraft 1.21.111, 1536 is the library default) and the game never sees an item."""
     server_bin = os.path.join(WS, "rak", "rakserver")
     client_bin = os.path.join(WS, "rak", "rakclient")
     if not (os.path.exists(server_bin) and os.path.exists(client_bin)):
@@ -324,6 +328,9 @@ def relay_test():
     def got_login(out):
         return "CLIENT LOGIN RESULT: ok" in out
 
+    def got_item_registry(out):
+        return "CLIENT ITEM REGISTRY RESULT: ok" in out
+
     # control: no VPN involved (root is not tunnelled) - proves the emulator -> host path and the stub backend
     ctl = {}
     for port in (19132, 19133):
@@ -339,6 +346,9 @@ def relay_test():
 
     check("control: the test tools complete the login round trip without the relay (port 19132)",
           got_login(ctl[19132]), ctl[19132].strip()[-100:].replace("\n", " | "))
+
+    check("control: the test tools complete the item registry round trip without the relay (port 19132)",
+          got_item_registry(ctl[19132]), ctl[19132].strip()[-100:].replace("\n", " | "))
 
     def count_req(path):
         return open(path).read().count("RequestNetworkSettings protocol=844")
@@ -385,6 +395,7 @@ def relay_test():
     results = []
     compressed_results = []
     login_results = []
+    registry_results = []
     session_logs = []
     sessions = [19132, 19133] * 8
     for idx, port in enumerate(sessions, 1):
@@ -394,6 +405,7 @@ def relay_test():
         results.append(got_settings(out))
         compressed_results.append(got_compressed(out))
         login_results.append(got_login(out))
+        registry_results.append(got_item_registry(out))
         session_logs.append("== relay session %d, port %d ==\n%s" % (idx, port, out.strip()))
         time.sleep(1)
     time.sleep(5)
@@ -421,6 +433,10 @@ def relay_test():
     okl = sum(login_results)
     check("relay sessions: all %d sessions completed the login round trip through the relay" % len(sessions),
           okl == len(sessions), "%d/%d ok: %s" % (okl, len(sessions), ["ok" if r else "NO" for r in login_results]))
+    okr = sum(registry_results)
+    check("relay sessions: all %d sessions got the item registry (packet 162, 1600 entries) through the relay"
+          % len(sessions), okr == len(sessions),
+          "%d/%d ok: %s" % (okr, len(sessions), ["ok" if r else "NO" for r in registry_results]))
     time.sleep(3)
     cap.terminate()
     subprocess.run("sudo pkill tcpdump", shell=True)
@@ -464,6 +480,12 @@ def relay_test():
           len(trace_out) >= len(sessions), "%d traced packet(s) of the game" % len(trace_out))
     check("relay log: the login trace named the packets of the server in every session",
           len(trace_in) >= len(sessions), "%d traced packet(s) of the server" % len(trace_in))
+    # a packet the relay cannot read is a packet the game never gets: the item registry of Minecraft
+    # 1.21.111 (1889 entries) used to fail the library's default list limit of 1536 and disappear here,
+    # which left the player without a single visible item
+    decode_failed = logcat_lines(r"Failed to decode packet")
+    check("relay log: no packet failed to decode (the item registry is longer than the default list limit)",
+          not decode_failed, " | ".join(d[-150:] for d in decode_failed[:3]))
     dropped_server = logcat_lines(r"packet to the server could not be sent|hit a pipeline error")
     check("relay log: no packet was dropped by the connection to the server", not dropped_server,
           " | ".join(d[-150:] for d in dropped_server[:3]))
