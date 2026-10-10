@@ -25,6 +25,9 @@
 -keep class kotlinx.** { *; }
 -keep class org.luaj.** { *; }
 -keep class org.cloudburstmc.netty.** { *; }
+# Packet class simple names are written to the release login trace; keep them readable instead of
+# letting R8 turn entries such as RequestNetworkSettingsPacket/LoginPacket into q2/m1.
+-keepnames class org.cloudburstmc.protocol.bedrock.packet.**
 -keep @io.netty.channel.ChannelHandler$Sharable class *
 
 -keepclassmembers class * {

@@ -37,9 +37,9 @@ import java.util.concurrent.atomic.AtomicInteger
  *  * the packets themselves were never named, so the log could not say where the flow stopped,
  *  * the connection to the server had no watchdog for dropped writes (see
  *    [MinecraftRelay.watchDroppedPackets]), which this listener installs on its first inbound
- *    packet. That is early enough: the connection to the server is built inside
- *    `MinecraftRelayListener.onSessionCreation`, before the first packet of the game is processed,
- *    so nothing has been written to it when its first packet arrives.
+ *    packet. This listener must run before [RelayListenerCompression]: that listener consumes the
+ *    initial `NetworkSettingsPacket` and stops listener dispatch, so anything after it would never
+ *    see that packet or install the watchdog before the game sends its login.
  *
  * `client.disconnect.lost` in that log is not evidence of a timeout, by the way: it is the default
  * `disconnectReason` every `BedrockSession` is constructed with, and the game side of the relay
