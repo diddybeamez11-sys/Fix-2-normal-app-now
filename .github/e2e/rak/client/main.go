@@ -10,11 +10,16 @@
 //	phase 3  ->  LoginPacket(844)              zlib           the relay re-signs it (offline session
 //	                                                                     encryption is on) and the backend answers
 //	                                                                     every login with a zlib NetworkSettings
+//	phase 4  <-  ItemRegistry(162, 1600 entries) zlib         the packet the backend sends after the login
+//	                                                                     must arrive with all of its entries
 //
 // Phase 2 proves that the relay swapped the compression codec of both connections correctly: the answer of
 // phase 1 and the codec swap race each other inside the relay. Phase 3 proves that the rewritten login
 // reaches the backend: without an authentication type the relay cannot encode it (protocol 818+) and the
-// backend never sees it.
+// backend never sees it. Phase 4 proves that the relay forwards a packet whose list is longer than the
+// 1536 entries a codec helper reads by default (EncodingSettings.DEFAULT.maxListSize): that is the item
+// registry, the only source of the client's item runtime ids since protocol 776, and a relay that drops it
+// leaves the player without a single visible item.
 package main
 
 import (
@@ -35,8 +40,14 @@ const (
 	idRequestNetworkSettings = 193
 	idNetworkSettings        = 143
 	idLogin                  = 1
+	idItemRegistry           = 162
 	compressionZlib          = 0x00
 	compressionNone          = 0xff
+
+	// what the stub backend puts into the item registry it sends after every login: above
+	// EncodingSettings.DEFAULT.maxListSize (1536), the limit a codec helper reads with unless the relay
+	// lifts it, and standing in for the 1889 entries of the real 1.21.111 registry
+	itemRegistryEntries = 1600
 )
 
 type conn interface {
@@ -121,6 +132,29 @@ func main() {
 		os.Exit(11)
 	}
 	fmt.Println("CLIENT LOGIN RESULT: ok")
+
+	// ---- phase 4: the item registry must survive the relay ----------------------------------
+	// Since protocol 776 the client learns its item runtime ids from packet 162 alone, and the registry
+	// of Minecraft 1.21.111 has 1889 entries - more than the 1536 a codec helper reads by default
+	// (EncodingSettings.DEFAULT.maxListSize). A relay that reads with those limits cannot decode the
+	// packet and drops it: the game joins, the world renders, and not one item is ever visible while the
+	// server keeps the real inventory. The login reply is scanned first: the relay flushes both packets
+	// in one datagram whenever it can.
+	body, err := waitForPacket(c, idItemRegistry, reply, 20*time.Second)
+	if err != nil {
+		fmt.Println("CLIENT ITEM REGISTRY RESULT:", err)
+		os.Exit(12)
+	}
+	entries, err := itemRegistryEntriesOf(body)
+	if err != nil {
+		fmt.Println("CLIENT ITEM REGISTRY RESULT: unreadable packet:", err)
+		os.Exit(13)
+	}
+	if entries != itemRegistryEntries {
+		fmt.Printf("CLIENT ITEM REGISTRY RESULT: %d entries arrived, the backend sent %d\n", entries, itemRegistryEntries)
+		os.Exit(14)
+	}
+	fmt.Printf("CLIENT ITEM REGISTRY RESULT: ok (%d entries)\n", entries)
 }
 
 func read(c conn, timeout time.Duration) ([]byte, error) {
@@ -232,4 +266,86 @@ func hasNetworkSettings(pk []byte, compressed bool) bool {
 		body = body[read+int(size):]
 	}
 	return false
+}
+
+// waitForPacket reads batches until one of them carries the game packet with the given id and returns the
+// body of that packet (its header stripped). alreadyRead is a batch the caller has read before: the relay
+// puts several packets into one datagram whenever it flushes them together, so the packet looked for here
+// may have arrived with the reply of the previous phase.
+func waitForPacket(c conn, id uint64, alreadyRead []byte, timeout time.Duration) ([]byte, error) {
+	if body := findPacket(alreadyRead, id); body != nil {
+		return body, nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, fmt.Errorf("timeout waiting for packet %d", id)
+		}
+		pk, err := read(c, remaining)
+		if err != nil {
+			return nil, err
+		}
+		if body := findPacket(pk, id); body != nil {
+			return body, nil
+		}
+		fmt.Printf("CLIENT read %d bytes that did not carry packet %d\n", len(pk), id)
+	}
+}
+
+// findPacket inflates a game packet (FE [compression prefix] <batch>) when it has to and returns the body
+// of the packet with the given id, or nil when the batch does not carry it. Both sides are on zlib from
+// the NetworkSettings handshake on, so a batch without a prefix is read as it is.
+func findPacket(pk []byte, id uint64) []byte {
+	if len(pk) < 2 || pk[0] != 0xFE {
+		return nil
+	}
+	body := pk[1:]
+	switch body[0] {
+	case compressionZlib:
+		raw, err := io.ReadAll(flate.NewReader(bytes.NewReader(body[1:])))
+		if err != nil {
+			fmt.Println("CLIENT inflate error:", err)
+			return nil
+		}
+		return findPacketInBatch(raw, id)
+	case compressionNone:
+		return findPacketInBatch(body[1:], id)
+	default:
+		return findPacketInBatch(body, id)
+	}
+}
+
+// findPacketInBatch splits a batch (varint length + packet, repeated) and returns the body of the packet
+// with the given id.
+func findPacketInBatch(batch []byte, id uint64) []byte {
+	for len(batch) > 0 {
+		size, n := binary.Uvarint(batch)
+		if n <= 0 || uint64(len(batch)-n) < size {
+			return nil
+		}
+		packet := batch[n : n+int(size)]
+		packetID, header := binary.Uvarint(packet)
+		if packetID == id {
+			return packet[header:]
+		}
+		batch = batch[n+int(size):]
+	}
+	return nil
+}
+
+// itemRegistryEntriesOf reads the entry count of an item registry packet and checks that the first and the
+// last identifier survived, so a packet that arrived truncated or wrongly re-encoded fails the phase
+// instead of passing on its length prefix alone.
+func itemRegistryEntriesOf(body []byte) (uint64, error) {
+	entries, n := binary.Uvarint(body)
+	if n <= 0 || entries == 0 {
+		return 0, fmt.Errorf("no entry count in the %d bytes that arrived", len(body))
+	}
+	first := []byte("minecraft:e2e_item_0000")
+	last := []byte(fmt.Sprintf("minecraft:e2e_item_%04d", entries-1))
+	if !bytes.Contains(body, first) || !bytes.Contains(body, last) {
+		return 0, fmt.Errorf("%q or %q is missing from the %d bytes that arrived", first, last, len(body))
+	}
+	return entries, nil
 }
