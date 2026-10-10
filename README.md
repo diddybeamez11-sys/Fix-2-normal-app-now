@@ -8,6 +8,18 @@ ProtoHax-Android is the Android implementation of [ProtoHax](https://github.com/
 2. Seamless switching/adapting multiple versions
 3. Full control of the packet layer
 
+## MotionFly (Android relay)
+
+The **MotionFly** module is available under **Movement** in the overlay. It uses client-bound
+ability and motion packets driven by the game's `PlayerAuthInput` packets. Its settings include
+horizontal/vertical speed, glide, delay, Lifeboat-style descent, jitter, and an optional
+anti-rubber-band motion cap and correction cooldown. Shortcuts are configured through the
+existing overlay shortcut control rather than a separate module setting.
+
+This is a client-side movement effect, not a server-side flight permission or a guaranteed
+anti-cheat bypass. Enabling MotionFly disables the built-in Fly module (and enabling Fly
+turns MotionFly off) so they do not compete over the player's movement.
+
 ## Issues
 - If you notice any bugs or missing features in the Android-specific code, you can let us know by opening an issue [here](https://github.com/SkidderMC/ProtoHax-Android/issues).
 - If you're having issues with the cheat features themselves, please send the issue to the main repository [here](https://github.com/SkidderMC/ProtoHax/issues).
