@@ -112,7 +112,8 @@ class ModuleMotionFly : CheatModule("MotionFly", CheatCategory.MOVEMENT) {
     }
 
     private val handleOutbound = handle<EventPacketOutbound> {
-        if (packet is RequestAbilityPacket && packet.ability == Ability.FLYING) {
+        val abilityRequest = packet as? RequestAbilityPacket
+        if (abilityRequest?.ability == Ability.FLYING) {
             // The fake ability belongs only to the local game, not the server.
             cancel()
             return@handle
