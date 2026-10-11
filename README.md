@@ -3,10 +3,49 @@
 <img align="right" width="159px" src="https://raw.githubusercontent.com/SkidderMC/ProtoHax/stable/icon.png">
 
 ProtoHax-Android is the Android implementation of [ProtoHax](https://github.com/SkidderMC/ProtoHax), an open-source cheat for Minecraft: Bedrock Edition that works through the network layer. This repository contains the Android-specific code for the cheat.
+
+**This fork additionally carries the module set of [WClient](https://github.com/Alextheplayer919/WClient), ported onto ProtoHax's API - see [WClient modules](#wclient-modules) below.**
+
 ## Features
 1. No modifications to Minecraft client
 2. Seamless switching/adapting multiple versions
 3. Full control of the packet layer
+
+## WClient modules
+
+`app/src/main/java/dev/sora/protohax/relay/modules` holds 29 modules ported from
+[WClient](https://github.com/Alextheplayer919/WClient) (GPLv3), which ships a much larger set of
+anarchy-server modules than ProtoHax does on its own. WClient has its own session and entity model,
+so each module was rewritten against `dev.sora.relay`: WClient's `beforePacketBound()` became
+`handle<EventPacketInbound>` / `handle<EventPacketOutbound>`, `intercept()` became `cancel()`,
+`session.clientBound()` became `session.sendPacketToClient()`.
+
+| Category | Modules |
+|---|---|
+| Combat | AntiKnockback, AutoTotem, Hitbox, HotbarSwitcher, InfiniteAura, TriggerBot |
+| Movement | AbilityFly, AntiAFK, AutoWalk, Bhop, Boost, HighJump, JetPack, MultiJump, NoClip, Spider, Sprint |
+| Visual | Fullbright, TimeShift, Zoom |
+| Misc | AntiDebuff, AutoDisconnect, ChatSpam, ChatSuffix, Desync, FakeDeath, NoChat, PositionLogger |
+
+Four names differ from WClient's because the ProtoHax library already uses them: `AbilityFly`
+(WClient `fly`), `Boost` (`speed`), `MultiJump` (`air_jump`) and `ChatSpam` (`Spammer`).
+
+Two ports deliberately differ from the original:
+
+* **AbilityFly / NoClip** keep WClient's approach - the server never grants anything, the relay
+  drops the abilities the server sends down and the ability requests the game sends up, and feeds
+  the game its own `UpdateAbilitiesPacket`. The shared plumbing is in
+  `modules/util/Abilities.kt` and `modules/motion/ModuleAbilityBase.kt`.
+* **Zoom** uses the protocol's own `CameraInstructionPacket` field-of-view instruction instead of
+  WClient's walk-speed trick, which this protocol version has no equivalent for.
+
+Shared helpers live next to them in `modules/util`: `MobList` (ported verbatim), `Abilities`, and
+`ModuleCombat` (attack, swing, silent aim, targeting, motion). All of them are registered in
+`MinecraftRelay.registerAdditionalModules`, and they show up in the overlay menu's existing
+category tabs - no UI change was needed.
+
+WClient is licensed under the GNU GPLv3 and so is this repository; see
+[License](#license).
 
 ## Issues
 - If you notice any bugs or missing features in the Android-specific code, you can let us know by opening an issue [here](https://github.com/SkidderMC/ProtoHax-Android/issues).
