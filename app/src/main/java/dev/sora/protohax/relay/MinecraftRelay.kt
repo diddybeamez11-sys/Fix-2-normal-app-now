@@ -7,6 +7,34 @@ import club.fdpclient.club.script.ScriptManager
 import club.fdpclient.club.script.ScriptManagerFileSystem
 import dev.sora.protohax.MyApplication
 import dev.sora.protohax.relay.modules.ModuleESP
+import dev.sora.protohax.relay.modules.combat.ModuleAntiKnockback
+import dev.sora.protohax.relay.modules.combat.ModuleAutoTotem
+import dev.sora.protohax.relay.modules.combat.ModuleHitbox
+import dev.sora.protohax.relay.modules.combat.ModuleHotbarSwitcher
+import dev.sora.protohax.relay.modules.combat.ModuleInfiniteAura
+import dev.sora.protohax.relay.modules.combat.ModuleTriggerBot
+import dev.sora.protohax.relay.modules.misc.ModuleAntiDebuff
+import dev.sora.protohax.relay.modules.misc.ModuleAutoDisconnect
+import dev.sora.protohax.relay.modules.misc.ModuleChatSpam
+import dev.sora.protohax.relay.modules.misc.ModuleChatSuffix
+import dev.sora.protohax.relay.modules.misc.ModuleDesync
+import dev.sora.protohax.relay.modules.misc.ModuleFakeDeath
+import dev.sora.protohax.relay.modules.misc.ModuleNoChat
+import dev.sora.protohax.relay.modules.misc.ModulePositionLogger
+import dev.sora.protohax.relay.modules.motion.ModuleAbilityFly
+import dev.sora.protohax.relay.modules.motion.ModuleAntiAFK
+import dev.sora.protohax.relay.modules.motion.ModuleAutoWalk
+import dev.sora.protohax.relay.modules.motion.ModuleBhop
+import dev.sora.protohax.relay.modules.motion.ModuleBoost
+import dev.sora.protohax.relay.modules.motion.ModuleHighJump
+import dev.sora.protohax.relay.modules.motion.ModuleJetPack
+import dev.sora.protohax.relay.modules.motion.ModuleMultiJump
+import dev.sora.protohax.relay.modules.motion.ModuleNoClip
+import dev.sora.protohax.relay.modules.motion.ModuleSpider
+import dev.sora.protohax.relay.modules.motion.ModuleSprint
+import dev.sora.protohax.relay.modules.visual.ModuleFullbright
+import dev.sora.protohax.relay.modules.visual.ModuleTimeShift
+import dev.sora.protohax.relay.modules.visual.ModuleZoom
 import dev.sora.protohax.relay.netty.channel.NativeRakConfig
 import dev.sora.protohax.relay.netty.channel.NativeRakServerChannel
 import dev.sora.protohax.relay.service.AppService
@@ -126,8 +154,56 @@ object MinecraftRelay {
 		return dir
 	}
 
-    private fun registerAdditionalModules(moduleManager: ModuleManager) {
+	/**
+	 * Registers the modules this app adds on top of the ProtoHax library.
+	 *
+	 * [ModuleESP] is the app's own; everything else was ported from
+	 * [WClient](https://github.com/Alextheplayer919/WClient) (GPLv3), which ships a much
+	 * larger set of anarchy-server modules. They are rewritten against `dev.sora.relay`
+	 * - WClient has its own session model - but keep WClient's behaviour and settings.
+	 *
+	 * A few names differ from WClient's because the bundled library already uses them
+	 * (`Fly`, `Speed`, `AirJump`, `Spammer`): `AbilityFly`, `Boost`, `MultiJump` and
+	 * `ChatSpam` are WClient's `fly`, `speed`, `air_jump` and `Spammer`.
+	 */
+	private fun registerAdditionalModules(moduleManager: ModuleManager) {
 		moduleManager.registerModule(ModuleESP())
+
+		// combat
+		moduleManager.registerModule(ModuleAntiKnockback())
+		moduleManager.registerModule(ModuleAutoTotem())
+		moduleManager.registerModule(ModuleHitbox())
+		moduleManager.registerModule(ModuleHotbarSwitcher())
+		moduleManager.registerModule(ModuleInfiniteAura())
+		moduleManager.registerModule(ModuleTriggerBot())
+
+		// movement
+		moduleManager.registerModule(ModuleAbilityFly())
+		moduleManager.registerModule(ModuleAntiAFK())
+		moduleManager.registerModule(ModuleAutoWalk())
+		moduleManager.registerModule(ModuleBhop())
+		moduleManager.registerModule(ModuleBoost())
+		moduleManager.registerModule(ModuleHighJump())
+		moduleManager.registerModule(ModuleJetPack())
+		moduleManager.registerModule(ModuleMultiJump())
+		moduleManager.registerModule(ModuleNoClip())
+		moduleManager.registerModule(ModuleSpider())
+		moduleManager.registerModule(ModuleSprint())
+
+		// visual
+		moduleManager.registerModule(ModuleFullbright())
+		moduleManager.registerModule(ModuleTimeShift())
+		moduleManager.registerModule(ModuleZoom())
+
+		// misc
+		moduleManager.registerModule(ModuleAntiDebuff())
+		moduleManager.registerModule(ModuleAutoDisconnect())
+		moduleManager.registerModule(ModuleChatSpam())
+		moduleManager.registerModule(ModuleChatSuffix())
+		moduleManager.registerModule(ModuleDesync())
+		moduleManager.registerModule(ModuleFakeDeath())
+		moduleManager.registerModule(ModuleNoChat())
+		moduleManager.registerModule(ModulePositionLogger())
 	}
 
     private fun constructRelay(): Relay {
