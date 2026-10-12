@@ -1,13 +1,15 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older that API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Auto-backup rules for API 30 and below (android:fullBackupContent).
+
+   The HWID whitelist state must not be restored onto another device: a restored copy would hand that
+   device the identity (and the verification timestamp) of the device the backup came from. The app
+   detects that case anyway - the encrypted store cannot be decrypted with a keystore key that does not
+   exist on the new device, and the ANDROID_ID check in DeviceId rejects a plain-preferences copy - but
+   not backing it up in the first place is the cleaner half of the same fix.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="sharedpref" path="protohax_hwid_identity.xml"/>
+    <exclude domain="sharedpref" path="protohax_hwid_identity_plain.xml"/>
+    <exclude domain="file" path="hwid.txt"/>
 </full-backup-content>

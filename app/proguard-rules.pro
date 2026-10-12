@@ -20,6 +20,17 @@
 # hide the original source file name.
 -renamesourcefileattribute null
 
+# androidx.security:security-crypto stores the HWID in EncryptedSharedPreferences through Google Tink.
+# Tink registers its primitives at runtime and has optional integrations that reference classes which do
+# not exist on Android, which R8 in full mode is free to strip. This project's CI builds the APK but
+# cannot run it, so the library is kept whole instead of trusting that nothing reflectively reached is
+# removed. (The gate itself does not depend on Tink: when the encrypted store cannot be opened the HWID
+# falls back to plain preferences with a warning, see dev.sora.protohax.hwid.HwidStore.)
+-keep class com.google.crypto.tink.** { *; }
+-dontwarn com.google.crypto.tink.**
+-dontwarn com.google.api.client.**
+-dontwarn javax.annotation.**
+
 # keep netty related classes
 -keep class io.netty.** { *; }
 -keep class kotlinx.** { *; }

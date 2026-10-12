@@ -33,6 +33,7 @@ class MicrosoftLoginActivity : Activity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        LicenseLock.startIfLocked(this)
 
         setContentView(R.layout.activity_microsoft_login)
         setResult(RESULT_CANCELED)

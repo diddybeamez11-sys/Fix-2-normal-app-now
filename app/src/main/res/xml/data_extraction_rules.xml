@@ -1,19 +1,20 @@
-<?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Data extraction rules for API 31+ (android:dataExtractionRules).
+
+   Same reason as backup_rules.xml: the HWID and its verification state must not travel to another
+   device, neither through a cloud backup nor through a device-to-device transfer. A device that gets
+   a copied identity would otherwise inherit a place on the whitelist it was never added to.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="sharedpref" path="protohax_hwid_identity.xml"/>
+        <exclude domain="sharedpref" path="protohax_hwid_identity_plain.xml"/>
+        <exclude domain="file" path="hwid.txt"/>
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="sharedpref" path="protohax_hwid_identity.xml"/>
+        <exclude domain="sharedpref" path="protohax_hwid_identity_plain.xml"/>
+        <exclude domain="file" path="hwid.txt"/>
     </device-transfer>
-    -->
 </data-extraction-rules>

@@ -4,6 +4,117 @@ plugins {
     id 'com.google.gms.google-services'
     id 'com.google.firebase.crashlytics'
 }
+
+// ====================================================================================================
+// Signing, and the HWID whitelist's APK signing certificate pin
+// ====================================================================================================
+//
+// The release build used to be signed with the debug keystore unconditionally, which is fine for a
+// client that is only ever side-loaded, but it makes the anti-tamper pin below depend on a keystore that
+// differs per machine. So:
+//
+//   * `keystore.properties` in the repository root (NOT committed, see .gitignore) makes the release
+//     build use a real release key:  storeFile, storePassword, keyAlias, keyPassword.
+//     `storeFile` may be absolute or relative to the repository root.
+//   * without it, the release build is signed exactly as before - with the Android debug keystore.
+//
+// Whatever signs the release build is hashed (SHA-256 of the X.509 certificate) and compiled into the
+// app as BuildConfig.HWID_SIGNING_CERT_SHA256. `Integrity` compares the certificate of the running APK
+// against that value and refuses to run on a mismatch, so "unzip, patch, re-sign with my own key, ship"
+// stops working. `-Phwid.certSha256=<hex>` overrides the derived value (needed when the APK is re-signed
+// outside this build, e.g. Google Play App Signing, where the shipped certificate is Play's app signing
+// certificate and not the upload key this build knows about).
+//
+// On a machine whose debug keystore does not exist yet (a fresh CI runner) the pin cannot be derived and
+// "UNPINNED" is compiled in instead: the check is then skipped at runtime with a warning rather than
+// refusing to run every APK. `-Phwid.requireCertPin=true` turns that case into a build failure, which is
+// what a release process that really wants the pin enforced should pass.
+
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+def releaseKeystoreProperties = new Properties()
+if (hasReleaseKeystore) {
+    keystorePropertiesFile.withInputStream { releaseKeystoreProperties.load(it) }
+}
+
+// What will sign the release APK (and where its certificate comes from), resolved once here so the
+// signing configuration and the pin cannot disagree.
+def signingStoreFile
+def signingStorePass
+def signingKeyAlias
+def signingKeyPass
+def signingDescription
+if (hasReleaseKeystore) {
+    signingStoreFile = rootProject.file(releaseKeystoreProperties['storeFile'])
+    signingStorePass = releaseKeystoreProperties['storePassword']
+    signingKeyAlias = releaseKeystoreProperties['keyAlias']
+    signingKeyPass = releaseKeystoreProperties['keyPassword']
+    signingDescription = "keystore.properties (${releaseKeystoreProperties['storeFile']})"
+} else {
+    // The same default the Android Gradle plugin uses for its own debug signing config.
+    signingStoreFile = new File(System.getProperty('user.home'), '.android/debug.keystore')
+    signingStorePass = 'android'
+    signingKeyAlias = 'androiddebugkey'
+    signingKeyPass = 'android'
+    signingDescription = "the Android debug keystore (${signingStoreFile}); " +
+            "put a real key in keystore.properties before distributing"
+}
+
+/**
+ * SHA-256 of the certificate stored under [alias], as lower-case hex without separators. Tries PKCS12
+ * and JKS, so it does not matter which of the two a keystore happens to be.
+ */
+def certificateSha256 = { File keystoreFile, String storePass, String alias, String keyPass ->
+    def lastError = null
+    for (type in ['PKCS12', 'JKS']) {
+        try {
+            def keyStore = java.security.KeyStore.getInstance(type)
+            keystoreFile.withInputStream { keyStore.load(it, storePass?.toCharArray() ?: new char[0]) }
+            def certificate = keyStore.getCertificate(alias)
+            if (certificate == null) {
+                throw new IllegalStateException("no certificate under alias '${alias}'")
+            }
+            return java.security.MessageDigest.getInstance('SHA-256')
+                    .digest(certificate.encoded)
+                    .collect { String.format('%02x', it) }
+                    .join('')
+        } catch (Throwable t) {
+            lastError = t
+        }
+    }
+    throw new IllegalStateException("cannot read ${keystoreFile}: ${lastError}")
+}
+
+def hwidCertSha256 = 'UNPINNED'
+def hwidCertPinSource = 'UNPINNED'
+def explicitPin = (findProperty('hwid.certSha256') ?: '').toString().trim()
+if (explicitPin) {
+    hwidCertSha256 = explicitPin.replace(':', '')
+    hwidCertPinSource = 'the hwid.certSha256 build property'
+} else if (signingStoreFile != null && signingStoreFile.exists()) {
+    try {
+        hwidCertSha256 = certificateSha256(signingStoreFile, signingStorePass, signingKeyAlias, signingKeyPass)
+        hwidCertPinSource = signingDescription
+    } catch (Throwable t) {
+        logger.warn("HWID whitelist: cannot derive the signing certificate pin from " +
+                "${signingStoreFile} (${t.message}); the pin check will be skipped at runtime")
+    }
+} else {
+    logger.warn("HWID whitelist: ${signingStoreFile} does not exist yet, so this build cannot derive " +
+            "the APK signing certificate pin; the pin check will be skipped at runtime")
+}
+// The pin source is compiled into the APK and shown in the dashboard, so keep it to characters that are
+// safe inside a Java string literal on every platform.
+def pinSourceForBuildConfig = hwidCertPinSource.replace('\\', '/').replace('"', "'")
+
+if (hwidCertSha256 == 'UNPINNED' && (findProperty('hwid.requireCertPin') ?: 'false').toString().toBoolean()) {
+    throw new GradleException(
+            "hwid.requireCertPin=true was requested but no signing certificate pin could be derived. " +
+                    "Sign with a keystore that exists (keystore.properties), or pass " +
+                    "-Phwid.certSha256=<sha256 of the APK signing certificate>.")
+}
+logger.lifecycle("HWID whitelist: APK signing certificate pin = ${hwidCertSha256} (from ${hwidCertPinSource})")
+
 android {
     namespace 'dev.sora.protohax'
     compileSdk 34
@@ -22,6 +133,10 @@ android {
         ndk {
             abiFilters 'arm64-v8a', 'x86_64'
         }
+
+        // Read by dev.sora.protohax.hwid.Integrity; see the comment block at the top.
+        buildConfigField 'String', 'HWID_SIGNING_CERT_SHA256', "\"${hwidCertSha256}\""
+        buildConfigField 'String', 'HWID_CERT_PIN_SOURCE', "\"${pinSourceForBuildConfig}\""
     }
     buildFeatures {
         compose true
@@ -29,13 +144,23 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion compose_compiler_version
     }
+    if (hasReleaseKeystore) {
+        signingConfigs {
+            release {
+                storeFile signingStoreFile
+                storePassword signingStorePass
+                keyAlias signingKeyAlias
+                keyPassword signingKeyPass
+            }
+        }
+    }
     buildTypes {
         release {
             shrinkResources true
             minifyEnabled true
             zipAlignEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig signingConfigs.debug
+            signingConfig hasReleaseKeystore ? signingConfigs.release : signingConfigs.debug
         }
     }
     compileOptions {
@@ -54,13 +179,50 @@ android {
         }
         jniLibs.useLegacyPackaging true
     }
+    testOptions {
+        // The HWID logic under dev.sora.protohax.hwid.pure is plain JVM code and is covered by
+        // ./gradlew :app:testDebugUnitTest. Nothing in it touches android.*, so no mock framework is
+        // needed; `unitTests.returnDefaultValues` stays off on purpose, so an accidental android.* call
+        // in that package fails the test instead of silently returning null.
+        unitTests.all {
+            testLogging {
+                events 'failed', 'skipped'
+                exceptionFormat 'full'
+            }
+        }
+    }
     configurations {
         all {
             resolutionStrategy {
                 // exclude duplicate classes
                 exclude group: 'com.google.guava', module: 'listenablefuture'
                 exclude group: 'com.google.errorprone', module: 'error_prone_annotations'
+                // androidx.security:security-crypto brings Google Tink, and Tink brings its own Gson.
+                // The bundled ProtoHax jar already contains Gson (2.10) - that is the one the rest of
+                // this app compiles and runs against - and two copies of com.google.gson.* in one APK
+                // fail the build's duplicate-class check. Tink only uses Gson for the JSON keyset
+                // readers, which EncryptedSharedPreferences does not touch.
+                exclude group: 'com.google.code.gson', module: 'gson'
             }
+        }
+    }
+}
+
+/**
+ * Prints the certificate the release build would be signed with and the pin it would compile in, e.g.
+ *   ./gradlew printHwidCertPin
+ * Useful when the APK is re-signed outside this build (Play App Signing): pass the value from the Play
+ * Console as -Phwid.certSha256=... or as hwid.certSha256= in gradle.properties.
+ */
+tasks.register('printHwidCertPin') {
+    group = 'hwid'
+    description = 'Prints the signing certificate the release build is pinned to'
+    doLast {
+        println "signing certificate source : ${hwidCertPinSource}"
+        println "signing keystore           : ${signingStoreFile}"
+        println "HWID cert pin compiled in  : ${hwidCertSha256}"
+        if (hwidCertSha256 == 'UNPINNED') {
+            println "  (no pin: the pin check is skipped at runtime - see the comment at the top of app/build.gradle)"
         }
     }
 }
@@ -70,6 +232,10 @@ dependencies {
     implementation 'dev.sora.networking:libmitm:1.2.3-raknet'
 
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.2'
+
+    // EncryptedSharedPreferences: the device's HWID and the gate's state live in an
+    // AES-256 encrypted preferences file whose master key is in the Android keystore.
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
     implementation 'androidx.core:core-ktx:1.10.1'
     implementation 'androidx.activity:activity-compose:1.7.2'
@@ -87,4 +253,8 @@ dependencies {
     implementation 'org.luaj:luaj-jse:3.0.1'
     implementation 'com.google.firebase:firebase-crashlytics:18.3.7'
     implementation 'com.google.firebase:firebase-analytics:21.3.0'
+
+    // Pure-JVM tests for the whitelist logic (signature verification, parsing, the gate's rules).
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation fileTree(dir: 'libs', include: ['ProtoHax-1.4.0.jar'])
 }

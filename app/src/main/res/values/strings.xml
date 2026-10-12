@@ -26,6 +26,44 @@
     <string name="dashboard_fab_connect">Connect</string>
     <string name="dashboard_fab_disconnect">Disconnect</string>
 
+    <!-- HWID whitelist -->
+    <string name="dashboard_license">License</string>
+    <string name="dashboard_license_checking">Checking the list...</string>
+    <string name="dashboard_license_allowed">Allowed</string>
+    <string name="dashboard_license_denied">Not allowed</string>
+    <string name="dashboard_license_revoked">Access removed</string>
+    <string name="dashboard_license_offline">Allowed (offline)</string>
+    <string name="dashboard_license_no_key">No signing key is compiled into this build: the list cannot be verified and every device is refused. See HWID_WHITELIST.md.</string>
+    <string name="hwid_label">Alternative ID (%1$s)</string>
+    <string name="hwid_copy">Copy alternative ID</string>
+    <string name="hwid_copied">Copied. Send it to the admin to be added to the list.</string>
+    <string name="hwid_check_again">Check again</string>
+    <string name="hwid_checking">Checking the list...</string>
+    <string name="hwid_not_allowed">This device is not allowed to run ProtoHax.</string>
+    <string name="hwid_revoked">ProtoHax: access for this device was removed by the admin. Closing.</string>
+    <string name="lock_title">ProtoHax is locked</string>
+    <string name="lock_headline_unapproved">This device is not on the approved list</string>
+    <string name="lock_headline_revoked">Access for this device was removed</string>
+    <string name="lock_headline_fatal">This build was refused</string>
+    <string name="lock_headline_allowed">Approved - unlocking...</string>
+    <string name="lock_id_label">Device ID</string>
+    <string name="lock_id_unavailable">unavailable on this device</string>
+    <string name="lock_copy_id">Copy ID</string>
+    <string name="lock_id_copied">ID copied. Send it to the admin to be added to the list.</string>
+    <string name="lock_secondary_label">Alternative ID (%1$s)</string>
+    <string name="lock_copy_secondary">Copy alternative ID</string>
+    <string name="lock_retry">Check again</string>
+    <string name="lock_retrying">Checking the list...</string>
+    <string name="lock_body">Send this Device ID to the admin and ask to be added. This screen checks again by itself and unlocks as soon as the ID is on the list - you can leave it open.</string>
+    <string name="lock_status_checking">Checking the list...</string>
+    <string name="lock_status_denied">Not on the list</string>
+    <string name="lock_status_revoked">Removed by the admin</string>
+    <string name="lock_status_refused">Refused</string>
+    <string name="lock_status_allowed">Approved - unlocking...</string>
+    <string name="lock_status_never">No verdict yet</string>
+    <string name="lock_last_check">Last check: %1$s</string>
+    <string name="lock_first_run_note">The first check can take up to half a minute.</string>
+
     <string name="config_rename">Rename</string>
     <string name="config_copy">Copy</string>
     <string name="config_share">Share</string>

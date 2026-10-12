@@ -6,3 +6,8 @@ local.properties
 signing.jks
 __pycache__/
 *.pyc
+
+# Android signing material - never commit these (see app/build.gradle)
+keystore.properties
+*.jks
+*.keystore
