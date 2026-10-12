@@ -16,6 +16,7 @@ import android.view.WindowManager
 import androidx.core.app.NotificationCompat
 import dev.sora.protohax.MyApplication
 import dev.sora.protohax.R
+import dev.sora.protohax.hwid.HwidGate
 import dev.sora.protohax.relay.MinecraftRelay
 import dev.sora.protohax.ui.activities.MainActivity
 import dev.sora.protohax.ui.components.screen.settings.Settings
@@ -65,6 +66,21 @@ class AppService : VpnService() {
         val action = intent.action
         try {
             if (ACTION_START == action) {
+                // Device approval, third and cheapest enforcement point. The verdict from the check
+                // MyApplication started is already in (or the device is offline and inside its grace
+                // period); if the gate has decided "no", there is no reason to build a VPN tunnel at
+                // all. This is the "nice" version of the refusal - the hard ones are in MinecraftRelay
+                // (no module registers, the relay never binds) and in HwidGate, which locks the UI or
+                // terminates the process. A still-pending verdict is *not* a refusal here: the relay
+                // gate blocks the bind until it is in.
+                if (HwidGate.isLocked()) {
+                    logError("refusing to start the VPN: this device is not approved")
+                    toast(R.string.hwid_not_allowed)
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+
                 // Promote the service immediately. Starting the VPN/TUN can take long enough
                 // that Android may otherwise kill the service before it enters foreground.
                 startForeground(1, createNotification())

@@ -11,6 +11,7 @@ import androidx.compose.material3.windowsizeclass.calculateWindowSizeClass
 import androidx.core.view.WindowCompat
 import com.google.accompanist.adaptive.calculateDisplayFeatures
 import dev.sora.protohax.MyApplication
+import dev.sora.protohax.ui.components.LicenseWatch
 import dev.sora.protohax.ui.components.PHaxApp
 import dev.sora.protohax.ui.theme.MyApplicationTheme
 import dev.sora.protohax.util.ContextUtils.readStringOrDefault
@@ -27,6 +28,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MyApplicationTheme {
+                // Puts the lock screen on top if this device has been refused - including when the
+                // verdict changes while the dashboard is open (a removal, an expired grace period).
+                LicenseWatch()
+
                 val windowSize = calculateWindowSizeClass(this)
                 val displayFeatures = calculateDisplayFeatures(this)
 
@@ -42,6 +47,13 @@ class MainActivity : ComponentActivity() {
 				requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
 			}
 		}
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Coming back to the dashboard must not bypass a refusal that arrived while the app was in the
+        // background: the lock screen goes back on top.
+        LicenseLock.startIfLocked(this)
     }
 
     companion object {

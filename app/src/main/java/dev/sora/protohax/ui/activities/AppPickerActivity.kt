@@ -51,6 +51,7 @@ class AppPickerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        LicenseLock.startIfLocked(this)
         setResult(RESULT_CANCELED)
 
         WindowCompat.setDecorFitsSystemWindows(window, false)

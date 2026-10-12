@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Used by the relay's own traffic, the Xbox Live login, and - since the HWID whitelist was added -
+         the two HTTPS GETs that read the whitelist file and its signature from the whitelist repository
+         (dev.sora.protohax.hwid.WhitelistClient, url in dev.sora.protohax.hwid.LicenseConfig). Already
+         present before this feature and still the only network permission the whitelist needs. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Required by ConnectivityManager#getActiveNetwork/getLinkProperties, which are used to
          detect the IPv4/IPv6 capabilities of the active network. Without this permission those
@@ -35,6 +39,11 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+        <activity
+            android:name="dev.sora.protohax.ui.activities.LicenseLockActivity"
+            android:exported="false"
+            android:theme="@style/Theme.ProtoHax">
         </activity>
         <activity
             android:name="dev.sora.protohax.ui.activities.MicrosoftLoginActivity"

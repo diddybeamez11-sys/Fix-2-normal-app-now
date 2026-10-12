@@ -6,6 +6,7 @@ import android.widget.Toast
 import club.fdpclient.club.script.ScriptManager
 import club.fdpclient.club.script.ScriptManagerFileSystem
 import dev.sora.protohax.MyApplication
+import dev.sora.protohax.hwid.HwidGate
 import dev.sora.protohax.relay.modules.ModuleESP
 import dev.sora.protohax.relay.modules.combat.ModuleAntiKnockback
 import dev.sora.protohax.relay.modules.combat.ModuleAutoTotem
@@ -94,6 +95,14 @@ object MinecraftRelay {
 
 		// load asynchronously
 		loaderThread = thread {
+			// HWID whitelist, layer (b) - first half. Nothing below this line runs for a device that is
+			// not on the list: not the library's modules, not this app's 30 modules, not one Lua script.
+			// awaitAllowed() blocks (off the main thread - this is the loader thread) until the verdict
+			// from the check MyApplication started exists, applies the offline grace rules when the list
+			// could not be fetched, and on "no" hands over to HwidGate.abort(), which terminates the
+			// process on purpose. It also never returns true once an abort has run.
+			if (!HwidGate.awaitAllowed("the relay's module loader")) return@thread
+
 			try {
 				moduleManager.init()
 				registerAdditionalModules(moduleManager)
@@ -336,6 +345,14 @@ object MinecraftRelay {
 	}
 
 	fun announceRelayUp() {
+		// HWID whitelist, layer (b) - second half, and the reason a patched-out crash is not enough to
+		// make this app useful: the relay is the product, and it is not bound here unless the check
+		// passed. This path is reached from the VPN service (a background thread) - awaitAllowed blocks
+		// for the verdict, so the socket is opened after the decision, never before it. A device that is
+		// not on the list leaves this function before bind(), so the game's RakNet connection on port
+		// 1337 has nothing to talk to and no packet is ever rewritten.
+		if (!HwidGate.awaitAllowed("the relay bind")) return
+
 		if (relay == null) {
 			relay = constructRelay()
 			updateReliability()
@@ -345,6 +362,11 @@ object MinecraftRelay {
 			relay!!.bind(InetSocketAddress("0.0.0.0", 1337))
 			logInfo("relay started")
 		}
+
+		// From here on this app is doing the work a refusal has to stop, so a refusal that arrives later
+		// (a removal picked up by the periodic re-check) terminates the process instead of only locking the
+		// UI - there is a bound socket and a live tunnel at this point. See HwidGate.shouldTerminate.
+		HwidGate.markRelayStarted()
 
 		// ProtoHax runs the whole Xbox Live login inside the packet pipeline, on the login packet of the
 		// game. Doing it here as well - while the user is still starting the game - keeps that login packet
