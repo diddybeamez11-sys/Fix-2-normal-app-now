@@ -47,6 +47,35 @@ category tabs - no UI change was needed.
 WClient is licensed under the GNU GPLv3 and so is this repository; see
 [License](#license).
 
+## Device approval (the whitelist)
+
+This fork can restrict itself to a list of approved devices. The list is a file in a **separate GitHub
+repository** - there is no server, no API and no dashboard: on start-up the app fetches `devices.json`
+(any file name works) and its detached `devices.json.sig` over HTTPS, verifies the signature against a
+public key compiled into the APK, and looks up this device's own identifier.
+
+* **in the list** -> the app runs;
+* **not in the list** -> the app **locks**: a screen shows the Device ID with a **Copy ID** button so the
+  user can send it to the operator, and it unlocks by itself as soon as a later check finds the ID - no
+  reinstall, no broken state. The relay cannot bind and no module registers either, even if that lock is
+  patched out;
+* **removed from the list** -> locked at the next check, and the removal is remembered locally, so it
+  applies even while the app is offline;
+* **list unreachable** -> it runs on the timestamp of the last successful check for at most 7 days, then
+  locks;
+* **repackaged or debugged APK** -> terminated, not locked.
+
+The identifier is the device's **ANDROID_ID** by default - readable with no permission, stable across
+reinstalls, shown on the lock screen and in the game's own device-id screens - and the app can be
+configured to use a random per-installation UUID instead (or to accept either). Both are shown with copy
+buttons on the lock screen and on the dashboard's License card, so a user always has something to send.
+
+Everything an operator needs - key generation, the signing command, the file format, approving and
+removing users, the grace-period trade-off, why this needs no backend, and an honest list of what this
+does *not* stop - is in **[HWID_WHITELIST.md](HWID_WHITELIST.md)**. The two constants to edit are in
+`app/src/main/java/dev/sora/protohax/hwid/LicenseConfig.kt`: `WHITELIST_URL` (line 69) and
+`SIGNING_PUBLIC_KEY_BASE64` (line 101).
+
 ## Issues
 - If you notice any bugs or missing features in the Android-specific code, you can let us know by opening an issue [here](https://github.com/SkidderMC/ProtoHax-Android/issues).
 - If you're having issues with the cheat features themselves, please send the issue to the main repository [here](https://github.com/SkidderMC/ProtoHax/issues).
