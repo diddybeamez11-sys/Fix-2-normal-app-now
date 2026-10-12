@@ -227,8 +227,25 @@ object LicenseConfig {
      */
     const val ENFORCE_CERT_PIN: Boolean = true
 
-    /** A repackaged APK with android:debuggable="true", or one with a debugger attached, is refused. */
-    const val DEBUGGER_DETECTION_FATAL: Boolean = true
+    /**
+     * A debuggable APK with a debugger attached (the "developer is running their own build from Android
+     * Studio" case). Whether that terminates the process or only locks the UI.
+     *
+     * true  - refused: the process is terminated (see [INTEGRITY_FAILURE_IS_FATAL]), NOT locked, so the
+     *         device ID is never shown on screen - it only goes to the clipboard, `hwid.txt` and logcat.
+     * false - reported (logged, shown on the dashboard) but not fatal: the app still locks normally and
+     *         the lock screen shows the device ID. **This is the default.**
+     *
+     * Why the default is false: this is the single setting that turns "I pressed Run in Android Studio to
+     * look at my own build" into an app that closes with no lock screen and no visible ID - which reads
+     * exactly like a crash. It adds no real protection against a distributed attacker: the only APK that
+     * is both `android:debuggable="true"` AND signed with the operator's certificate is the operator's
+     * own build (a third party cannot produce one without the signing key, and re-signing changes the
+     * certificate, which [ENFORCE_CERT_PIN] still catches and terminates). So as a *fatal* it only ever
+     * bites the developer. Set it back to true if you specifically want a debug build under a debugger to
+     * be terminated rather than locked.
+     */
+    const val DEBUGGER_DETECTION_FATAL: Boolean = false
 
     /**
      * Root heuristics (`su` in the usual places, `test-keys` ROMs) are *reported* always and refused only

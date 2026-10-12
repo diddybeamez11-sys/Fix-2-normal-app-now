@@ -182,3 +182,19 @@ period and the lock-vs-terminate behaviour, is in **[HWID_WHITELIST.md §2 and �
 The unit tests cover the exact verification path (`SignatureVerifier`), both file formats, rollback
 rejection and every policy branch, using a committed signed fixture with a throwaway key unrelated to the
 deployment key above.
+
+## 7. Crash-on-open fix (debuggable build under a debugger)
+
+Symptom this fixes: *"open the app, it closes and never shows the device ID."* The one path in the gate
+that closes the app **without** showing the lock screen is the deliberate fatal termination, which fires
+on a **debuggable APK with a debugger attached** — i.e. pressing **Run/Debug in Android Studio**. In that
+case the ID only goes to the clipboard / `hwid.txt` / `logcat -s ProtoHaxHwid`, never to the screen.
+
+`LicenseConfig.DEBUGGER_DETECTION_FATAL` is now `false`, so a debuggable+debugger build is *reported* but
+not fatal: the app locks normally and the lock screen shows the device ID. This is safe — the only APK
+that is both debuggable and signed with the operator's certificate is the operator's own build, and the
+certificate pin (`ENFORCE_CERT_PIN`) still terminates a genuinely repackaged APK.
+
+If the app still closes with **no** toast and no lock screen when you just tap the installed icon (not
+debugging), the crash is **not** in this gate — grab `adb logcat -s ProtoHaxHwid` plus the red crash
+stack and it will name the real cause.
