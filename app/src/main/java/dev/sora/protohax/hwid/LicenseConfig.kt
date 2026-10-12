@@ -52,9 +52,10 @@ object LicenseConfig {
     // ================================================================================================
     //
     // Paste the raw URL of your file here. It has to be the *raw* URL of the file that holds the list,
-    // in the repository you keep it in, e.g.
+    // in the repository you keep it in. This build is configured for the `diddybeamez11-sys/Verify`
+    // whitelist repository:
     //
-    //     https://raw.githubusercontent.com/diddybeamez11-sys/protohax-devices/main/devices.json
+    //     https://raw.githubusercontent.com/diddybeamez11-sys/Verify/main/devices.json
     //
     // The file name is yours (`devices.json`, `hwids.json`, `approved.txt` - this app never looks at
     // the name). The detached signature is fetched from this same URL with `.sig` appended
@@ -66,7 +67,7 @@ object LicenseConfig {
     // Both are plain files in that repository. Nothing else is fetched, ever. Point this at your
     // repository before shipping: with an unreachable URL and no signature key the build is
     // fail-closed, i.e. every device locks.
-    const val WHITELIST_URL: String = "https://raw.githubusercontent.com/<OWNER>/<DEVICES-REPO>/main/devices.json"
+    const val WHITELIST_URL: String = "https://raw.githubusercontent.com/diddybeamez11-sys/Verify/main/devices.json"
 
     /** The signature file is the list URL plus this. Do not change unless you must. */
     const val SIGNATURE_URL_SUFFIX: String = ".sig"
@@ -98,7 +99,14 @@ object LicenseConfig {
     // Empty means "no key configured": with REQUIRE_SIGNATURE = true that makes every list fail
     // verification, i.e. every device locks. That is deliberate - the gate is fail-closed - and it is
     // why the setup order in HWID_WHITELIST.md sets this before anything is shipped.
-    const val SIGNING_PUBLIC_KEY_BASE64: String = ""
+    //
+    // This is set for the `diddybeamez11-sys/Verify` whitelist. The private half of THIS key lives
+    // only on the operator's machine (see HWID_WHITELIST.md / DEPLOYMENT.md) and is never committed,
+    // printed in CI, or uploaded. To confirm the app matches your key without touching the private
+    // half, compare fingerprints (SHA-256 of the SPKI bytes) - the configured key is:
+    //     69:18:ec:cb:e7:de:81:59:10:a6:10:af:2f:1c:6d:7a:2b:bd:46:53:45:bb:fb:89:1e:6b:1c:0b:a5:51:a5:5c
+    // i.e. `openssl ec -in <key>.pem -pubout -outform DER | openssl dgst -sha256`.
+    const val SIGNING_PUBLIC_KEY_BASE64: String = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERS4HV6bJT+7cmc/U/Aih4m03SEyC9ZuJUtZVhwP0tcViRcAOXFDRy9WBlRqrFLtyGhlxwQqDtXtTZlZcFQ0UpA=="
 
     /**
      * true  - a valid signature is required. The list is only trusted if it was signed with the private

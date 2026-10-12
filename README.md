@@ -73,8 +73,8 @@ buttons on the lock screen and on the dashboard's License card, so a user always
 Everything an operator needs - key generation, the signing command, the file format, approving and
 removing users, the grace-period trade-off, why this needs no backend, and an honest list of what this
 does *not* stop - is in **[HWID_WHITELIST.md](HWID_WHITELIST.md)**. The two constants to edit are in
-`app/src/main/java/dev/sora/protohax/hwid/LicenseConfig.kt`: `WHITELIST_URL` (line 69) and
-`SIGNING_PUBLIC_KEY_BASE64` (line 101).
+`app/src/main/java/dev/sora/protohax/hwid/LicenseConfig.kt`: `WHITELIST_URL` (line 70) and
+`SIGNING_PUBLIC_KEY_BASE64` (line 109).
 
 ## Issues
 - If you notice any bugs or missing features in the Android-specific code, you can let us know by opening an issue [here](https://github.com/SkidderMC/ProtoHax-Android/issues).
