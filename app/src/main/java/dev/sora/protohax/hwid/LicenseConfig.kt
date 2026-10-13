@@ -104,9 +104,9 @@ object LicenseConfig {
     // only on the operator's machine (see HWID_WHITELIST.md / DEPLOYMENT.md) and is never committed,
     // printed in CI, or uploaded. To confirm the app matches your key without touching the private
     // half, compare fingerprints (SHA-256 of the SPKI bytes) - the configured key is:
-    //     69:18:ec:cb:e7:de:81:59:10:a6:10:af:2f:1c:6d:7a:2b:bd:46:53:45:bb:fb:89:1e:6b:1c:0b:a5:51:a5:5c
+    //     bb:31:be:dc:4a:72:13:5e:ac:0d:9d:4d:15:30:0e:0f:fb:8e:60:bd:f4:69:e8:5a:2b:18:03:9b:84:0c:55:48
     // i.e. `openssl ec -in <key>.pem -pubout -outform DER | openssl dgst -sha256`.
-    const val SIGNING_PUBLIC_KEY_BASE64: String = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERS4HV6bJT+7cmc/U/Aih4m03SEyC9ZuJUtZVhwP0tcViRcAOXFDRy9WBlRqrFLtyGhlxwQqDtXtTZlZcFQ0UpA=="
+    const val SIGNING_PUBLIC_KEY_BASE64: String = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqMxPs6lR0QN5NbVxb4glYgLD6VPb12eyR/Sz6p8hBWsNLPqD1/sIET/GwDWjI425W/mgt6RhedClRVqTdEu2tw=="
 
     /**
      * true  - a valid signature is required. The list is only trusted if it was signed with the private

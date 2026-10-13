@@ -9,6 +9,13 @@ rationale, every knob, the anti-tamper details and the honest "what this does *n
 Everything here was produced with the two documented tools in `tools/` — no key or signature was
 invented, and none was pasted from anywhere but a real keygen + sign run.
 
+> **Current status (2026-10-13).** The gate is fully configured and the new signature verifies against the
+> new public key over the exact `devices.json` bytes. **Two things make the app actually pass:**
+> 1. **Rebuild the app** so it compiles in the new `SIGNING_PUBLIC_KEY_BASE64` (§1). The public key changed
+>    because the first keypair's private half was lost in a sandbox reset (see §2).
+> 2. **Commit `devices.json.sig` to the `Verify` repo** (§4). It is not there yet — that missing file is the
+>    `HTTPS 404 for the signature` you saw. Once both are done, device `30da222dfbebbdab` is approved.
+
 ## 1. What is configured
 
 In `app/src/main/java/dev/sora/protohax/hwid/LicenseConfig.kt`:
@@ -16,7 +23,7 @@ In `app/src/main/java/dev/sora/protohax/hwid/LicenseConfig.kt`:
 | constant | value |
 |---|---|
 | `WHITELIST_URL` | `https://raw.githubusercontent.com/diddybeamez11-sys/Verify/main/devices.json` |
-| `SIGNING_PUBLIC_KEY_BASE64` | `MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERS4HV6bJT+7cmc/U/Aih4m03SEyC9ZuJUtZVhwP0tcViRcAOXFDRy9WBlRqrFLtyGhlxwQqDtXtTZlZcFQ0UpA==` |
+| `SIGNING_PUBLIC_KEY_BASE64` | `MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqMxPs6lR0QN5NbVxb4glYgLD6VPb12eyR/Sz6p8hBWsNLPqD1/sIET/GwDWjI425W/mgt6RhedClRVqTdEu2tw==` |
 | `REQUIRE_SIGNATURE` | `true` (unchanged — signature verification stays **on**) |
 
 The signature file is fetched from `WHITELIST_URL + ".sig"`, i.e.
@@ -48,24 +55,31 @@ node tools/hwid-keygen.mjs --out ~/hwid-signing-key.pem
 
 * **Private key** → `~/hwid-signing-key.pem` (mode `600`). This is the **only secret** in the whole
   scheme. It is **never committed** to this repo or to `Verify`, **never printed in CI logs**, and
-  **never uploaded**. This repo's `.gitignore` now carries `hwid-signing-key.pem`, `*.pem`, `*.key`
-  and `devices.json.sig` as a safety net, but the file is deliberately kept **outside** the repo tree
-  so it can never be staged by accident. **Back it up** — without it you can never update the list
-  again.
+  **never uploaded**. This repo's `.gitignore` carries `hwid-signing-key.pem`, `*.pem`, `*.key`
+  and `devices.json.sig` as a safety net, so the copy kept at `<repo>/hwid-signing-key.pem` can never be
+  staged by accident. **Back it up outside this sandbox right now** — without it you can never update the
+  list again.
+  > **Re-key note.** The first keypair's private half only ever existed in the sandbox's `/home/user`,
+  > which was wiped by an environment reset between sessions, so it is unrecoverable. A fresh keypair was
+  > generated, the public key in `LicenseConfig.kt` and the signature were updated to match, and
+  > `devices.json` was re-signed. The current private key is saved at both `~/hwid-signing-key.pem` and
+  > `<repo>/hwid-signing-key.pem` (git-ignored). Because a sandbox reset can wipe `/home/user` again, copy
+  > it to your own machine now; for a permanent deployment, generate the keypair on your own PC instead
+  > (HWID_WHITELIST.md §1.2) and repeat §1 + §3.
 * **Public key** → pasted into `LicenseConfig.SIGNING_PUBLIC_KEY_BASE64` (see §1). It is public; it is
   safe to publish and is compiled into the APK.
 
 ## 3. What was signed, and how it was verified
 
-`devices.json` in `Verify` (git blob `d9909f2f9f55a13403e42092231340b62fe594e2`, 98 bytes, SHA-256
-`e20a60ef24c60e5c9e7f6c79714f8ccdf887b8e25808a493a7fe362c68630a82`):
+`devices.json` in `Verify` (git blob `569902c547f3e43bf8d32866a2f780efba799e1b`, 98 bytes, SHA-256
+`b19c6b6251ffc73e1d57166b9e515af353489397637984fd755754cda0b854c6`):
 
 ```json
 {
   "version": 1,
   "issued": "2026-10-12T12:00:00Z",
   "devices": [
-    "3f2c1e8a5b474d0e"
+    "30da222dfbebbdab"
   ]
 }
 ```
@@ -74,7 +88,7 @@ The signature (`devices.json.sig`, base64 of the DER ECDSA P-256 / SHA-256 signa
 bytes** of the file above) is:
 
 ```
-MEUCIGjhpuYJU1vpHltmG4X5OgT/MGKO9YQkfo0i4nFERoBkAiEAysD8tFRkOuNxbEt0nWWaHQzvCeN2dfh1ZNclDQ6ZCOE=
+MEQCIHv6fKuY/sZU6cP1BJwMadYfxK8FHGocCKV+5LriiwgAAiBIR38ZNfYCb5zbZkgE3gjbFR9icD7paRplNYrJzzXTbQ==
 ```
 
 It was produced and checked three independent ways, all green:
@@ -104,7 +118,22 @@ key, so a matching signature on the real bytes is what the app will accept.
 The sandbox this was prepared in can **read** `diddybeamez11-sys/Verify` but its token is **not allowed
 to write** to it — both the REST API and `git push` return `403` for that repository, so `devices.json.sig`
 could not be pushed from here. The signature file itself is already produced and verified; it only needs
-to be committed to `Verify` by someone with write access (you, from your own machine or CI):
+to be committed to `Verify` by someone with write access (you). Until it is there, the app fetches a
+`devices.json.sig` that **404s** and therefore fails closed — that is exactly the
+`the list could not be fetched (HTTPS 404 for the signature)` message you saw.
+
+**Easiest — GitHub web UI (no command line, no git):**
+
+1. Open https://github.com/diddybeamez11-sys/Verify → **Add file** → **Create new file**.
+2. Name it exactly `devices.json.sig`.
+3. Paste this one line as the entire contents (nothing else):
+
+   ```
+   MEQCIHv6fKuY/sZU6cP1BJwMadYfxK8FHGocCKV+5LriiwgAAiBIR38ZNfYCb5zbZkgE3gjbFR9icD7paRplNYrJzzXTbQ==
+   ```
+4. **Commit** it to `main`. Do **not** touch `devices.json` — the signature is over its exact bytes.
+
+**Or with git**, from a checkout that can write to `Verify`:
 
 ```bash
 cd <your Verify checkout>
