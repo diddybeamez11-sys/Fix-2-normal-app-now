@@ -85,7 +85,11 @@ object MinecraftRelay {
     val configManager: ConfigManagerFileSystem
 	val hudManager: HudManager
 
-	val tokenCacheFile = XboxAuthWarmUp.tokenCacheFile
+	// A property, not a field: XboxAuthWarmUp reads MyApplication.instance, which only exists once
+	// onCreate has run, so touching it while this object is being initialised would take the whole
+	// class down with an ExceptionInInitializerError.
+	val tokenCacheFile: File
+		get() = XboxAuthWarmUp.tokenCacheFile
 
 	var loaderThread: Thread? = null
 

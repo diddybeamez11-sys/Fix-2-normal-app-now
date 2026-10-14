@@ -34,6 +34,7 @@ import dev.sora.protohax.R
 import dev.sora.protohax.relay.netty.log.NettyLogger
 import dev.sora.protohax.ui.theme.MyApplicationTheme
 import dev.sora.protohax.util.ContextUtils.shareTextAsFile
+import dev.sora.protohax.util.CrashHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -59,6 +60,9 @@ class LogActivity : ComponentActivity() {
 		val scope = rememberCoroutineScope()
 		val text = remember { mutableStateOf("") }
 		val mContext = LocalContext.current
+		// A crash of a previous run, if one is waiting (see util/CrashHandler). Read once: the
+		// file only appears when a previous process died, never while this one is alive.
+		val crash = remember { CrashHandler.lastCrash(mContext) }
 
 		Scaffold(
 			topBar = {
@@ -80,7 +84,7 @@ class LogActivity : ComponentActivity() {
 								contentDescription = stringResource(id = R.string.logcat_share)
 							)
 						}
-						IconButton(onClick = { scope.refreshLogs(text, true) }) {
+						IconButton(onClick = { scope.refreshLogs(text, crash, true) }) {
 							Icon(
 								imageVector = Icons.Default.ClearAll,
 								contentDescription = stringResource(id = R.string.logcat_clear)
@@ -96,7 +100,7 @@ class LogActivity : ComponentActivity() {
 						.verticalScroll(rememberScrollState())
 				) {
 					// this method was triggered every time the view updated
-					scope.refreshLogs(text)
+					scope.refreshLogs(text, crash)
 
 					SelectionContainer {
 						Text(text = text.value, color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -107,13 +111,21 @@ class LogActivity : ComponentActivity() {
 		)
 	}
 
-	private fun CoroutineScope.refreshLogs(text: MutableState<String>, flush: Boolean = false) {
+	private fun CoroutineScope.refreshLogs(text: MutableState<String>, crash: String? = null, flush: Boolean = false) {
 		launch {
 			if (flush) {
 				NettyLogger.clearLogs()
 			}
 
-			text.value = NettyLogger.getLogs()
+			// The crash report comes first: it is the reason somebody opens this screen after
+			// the app closed itself, and the logcat ring buffer is usually past it by then.
+			text.value = buildString {
+				if (!crash.isNullOrBlank()) {
+					appendLine(crash)
+					appendLine()
+				}
+				append(NettyLogger.getLogs())
+			}.trimEnd()
 
 			if (text.value.isBlank()) {
 				text.value = "no logs currently"

@@ -85,6 +85,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
+      - name: Which library versions actually ship (dependency tree)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/diag-out"
+          chmod +x gradlew
+          ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --no-daemon > /tmp/deps.txt 2>&1 || true
+          grep -E "androidx\.compose|androidx\.security|androidx\.activity|androidx\.navigation|accompanist|androidx\.core:core" /tmp/deps.txt \
+            | sort -u > "$GITHUB_WORKSPACE/diag-out/00-deps.txt"
+          wc -l "$GITHUB_WORKSPACE/diag-out/00-deps.txt"
       - uses: actions/download-artifact@v8
         with:
           name: apk-diag

@@ -58,31 +58,104 @@ object AccountManager {
         load()
     }
 
+    /**
+     * Reads the stored accounts into [accounts].
+     *
+     * This object is initialised while the application is starting up (`MyApplication.onCreate` ->
+     * `XboxAuthWarmUp`), so anything that throws here is an `ExceptionInInitializerError` in the
+     * app's start-up: the app dies on open, and because a Kotlin object is only ever initialised
+     * once, every later access throws `NoClassDefFoundError` - the app stays dead until its data
+     * is cleared. That is exactly what an unreadable `credentials.json` used to do:
+     *
+     *  * an empty or whitespace-only file makes `gson.fromJson` return null, and
+     *    `addAll(null)` is a NullPointerException;
+     *  * a truncated file (the app killed in the middle of a save), or one written by an older
+     *    build, is a JsonSyntaxException.
+     *
+     * Neither is worth that. An unreadable file is moved aside - not deleted, so it can still be
+     * looked at - and the app starts with no account, i.e. with the "no account selected" card the
+     * user can act on.
+     */
     fun load() {
         accounts.clear()
 
-        if (!storeFile.exists()) {
+        try {
+            if (!storeFile.exists()) {
+                currentRefreshToken = null
+                return
+            }
+
+            val stored = readStored()
+            if (stored == null) {
+                quarantine()
+                currentRefreshToken = null
+                return
+            }
+
+            accounts.addAll(stored)
+            cleanupCurrentRefreshToken()
+        } catch (t: Throwable) {
+            // Last resort: never let the account store take the start-up down with it.
+            logError("load the stored accounts", t)
+            accounts.clear()
             currentRefreshToken = null
-            return
         }
-
-        accounts.addAll(
-            gson.fromJson(
-                storeFile.reader(Charsets.UTF_8),
-                Array<Account>::class.java
-            )
-        )
-
-        cleanupCurrentRefreshToken()
     }
 
+    /** @return the stored accounts, or null when the file could not be read or parsed. */
+    private fun readStored(): List<Account>? = try {
+        storeFile.reader(Charsets.UTF_8).use {
+            // null, not an exception, is what Gson returns for a file with nothing in it
+            gson.fromJson(it, Array<Account>::class.java)?.toList()
+        }
+    } catch (t: Throwable) {
+        logError("read ${storeFile.name}", t)
+        null
+    }
+
+    /** Moves the unreadable file aside instead of destroying it. */
+    private fun quarantine() {
+        val bad = File(storeFile.parentFile, storeFile.name + ".bad")
+        try {
+            if (bad.exists()) bad.delete()
+            if (storeFile.renameTo(bad)) {
+                logError(
+                    "the stored accounts could not be read, moved to ${bad.name}",
+                    IllegalStateException("unreadable account file")
+                )
+            } else {
+                storeFile.delete()
+                logError(
+                    "the stored accounts could not be read and could not be moved aside, removed",
+                    IllegalStateException("unreadable account file")
+                )
+            }
+        } catch (t: Throwable) {
+            logError("move the unreadable account file aside", t)
+        }
+    }
+
+    /**
+     * Writes the accounts back.
+     *
+     * The JSON goes to a temporary file that is then renamed over the real one: a rename inside
+     * one directory is atomic, so an app that is killed in the middle of a save leaves the
+     * previous file behind rather than a half-written one that cannot be read on the next start.
+     */
     fun save() {
-        storeFile.writeText(
-            gson.toJson(
-                accounts.toTypedArray(),
-                Array<Account>::class.java
-            )
-        )
+        try {
+            val json = gson.toJson(accounts.toTypedArray(), Array<Account>::class.java)
+            val parent = storeFile.parentFile ?: return
+            val tmp = File(parent, storeFile.name + ".tmp")
+            tmp.writeText(json)
+            if (!tmp.renameTo(storeFile)) {
+                // some file systems refuse to rename over an existing file; fall back to a copy
+                storeFile.writeText(json)
+                tmp.delete()
+            }
+        } catch (t: Throwable) {
+            logError("save the accounts", t)
+        }
     }
 
     private fun cleanupCurrentRefreshToken() {

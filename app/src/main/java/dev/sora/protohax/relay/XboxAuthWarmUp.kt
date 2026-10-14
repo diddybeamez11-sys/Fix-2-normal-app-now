@@ -42,7 +42,13 @@ object XboxAuthWarmUp {
      * and the device type, so a warm-up of one account never covers another one. It lives in filesDir (and
      * not in cacheDir) because the system may clear the cache directory at any time.
      */
-    val tokenCacheFile = File(MyApplication.instance.filesDir, "token_cache.json")
+    /**
+     * Lazy on purpose: `MyApplication.instance` is only set inside `onCreate`, so a field that
+     * reads it while the class is being loaded (this object is touched from `MinecraftRelay`,
+     * which can be initialised from anywhere) would fail the whole class with an
+     * `ExceptionInInitializerError` instead of just this warm-up.
+     */
+    val tokenCacheFile: File by lazy { File(MyApplication.instance.filesDir, "token_cache.json") }
 
     private const val ATTEMPTS = 3
     private const val RETRY_DELAY_MS = 1000L

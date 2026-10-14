@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
@@ -254,15 +253,17 @@ private fun LockScreen(onUnlocked: () -> Unit) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(4.dp))
-                    SelectionContainer {
-                        Text(
-                            text = approvalId.ifBlank { stringResource(R.string.lock_id_unavailable) },
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                    }
+                    // Not wrapped in SelectionContainer: a selectable one-line Text crashes in
+                    // Compose 1.4.3 while it is being drawn ("lineIndex(-1) is out of bounds"), and
+                    // this screen is the one place a user who is not approved yet must be able to
+                    // read. The Copy ID button right below does the same job.
+                    Text(
+                        text = approvalId.ifBlank { stringResource(R.string.lock_id_unavailable) },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
                     Spacer(Modifier.height(10.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Button(onClick = {
@@ -294,14 +295,13 @@ private fun LockScreen(onUnlocked: () -> Unit) {
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        SelectionContainer {
-                            Text(
-                                text = secondaryId,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        // Not selectable, for the same reason as the primary ID above.
+                        Text(
+                            text = secondaryId,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         TextButton(onClick = {
                             if (HwidReport.copyToClipboard(ctx, secondaryId)) {
                                 ctx.toast(R.string.lock_id_copied)
