@@ -52,9 +52,10 @@ object LicenseConfig {
     // ================================================================================================
     //
     // Paste the raw URL of your file here. It has to be the *raw* URL of the file that holds the list,
-    // in the repository you keep it in, e.g.
+    // in the repository you keep it in. This build is configured for the `diddybeamez11-sys/Verify`
+    // whitelist repository:
     //
-    //     https://raw.githubusercontent.com/diddybeamez11-sys/protohax-devices/main/devices.json
+    //     https://raw.githubusercontent.com/diddybeamez11-sys/Verify/main/devices.json
     //
     // The file name is yours (`devices.json`, `hwids.json`, `approved.txt` - this app never looks at
     // the name). The detached signature is fetched from this same URL with `.sig` appended
@@ -66,7 +67,7 @@ object LicenseConfig {
     // Both are plain files in that repository. Nothing else is fetched, ever. Point this at your
     // repository before shipping: with an unreachable URL and no signature key the build is
     // fail-closed, i.e. every device locks.
-    const val WHITELIST_URL: String = "https://raw.githubusercontent.com/<OWNER>/<DEVICES-REPO>/main/devices.json"
+    const val WHITELIST_URL: String = "https://raw.githubusercontent.com/diddybeamez11-sys/Verify/main/devices.json"
 
     /** The signature file is the list URL plus this. Do not change unless you must. */
     const val SIGNATURE_URL_SUFFIX: String = ".sig"
@@ -98,7 +99,14 @@ object LicenseConfig {
     // Empty means "no key configured": with REQUIRE_SIGNATURE = true that makes every list fail
     // verification, i.e. every device locks. That is deliberate - the gate is fail-closed - and it is
     // why the setup order in HWID_WHITELIST.md sets this before anything is shipped.
-    const val SIGNING_PUBLIC_KEY_BASE64: String = ""
+    //
+    // This is set for the `diddybeamez11-sys/Verify` whitelist. The private half of THIS key lives
+    // only on the operator's machine (see HWID_WHITELIST.md / DEPLOYMENT.md) and is never committed,
+    // printed in CI, or uploaded. To confirm the app matches your key without touching the private
+    // half, compare fingerprints (SHA-256 of the SPKI bytes) - the configured key is:
+    //     bb:31:be:dc:4a:72:13:5e:ac:0d:9d:4d:15:30:0e:0f:fb:8e:60:bd:f4:69:e8:5a:2b:18:03:9b:84:0c:55:48
+    // i.e. `openssl ec -in <key>.pem -pubout -outform DER | openssl dgst -sha256`.
+    const val SIGNING_PUBLIC_KEY_BASE64: String = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqMxPs6lR0QN5NbVxb4glYgLD6VPb12eyR/Sz6p8hBWsNLPqD1/sIET/GwDWjI425W/mgt6RhedClRVqTdEu2tw=="
 
     /**
      * true  - a valid signature is required. The list is only trusted if it was signed with the private
@@ -219,8 +227,25 @@ object LicenseConfig {
      */
     const val ENFORCE_CERT_PIN: Boolean = true
 
-    /** A repackaged APK with android:debuggable="true", or one with a debugger attached, is refused. */
-    const val DEBUGGER_DETECTION_FATAL: Boolean = true
+    /**
+     * A debuggable APK with a debugger attached (the "developer is running their own build from Android
+     * Studio" case). Whether that terminates the process or only locks the UI.
+     *
+     * true  - refused: the process is terminated (see [INTEGRITY_FAILURE_IS_FATAL]), NOT locked, so the
+     *         device ID is never shown on screen - it only goes to the clipboard, `hwid.txt` and logcat.
+     * false - reported (logged, shown on the dashboard) but not fatal: the app still locks normally and
+     *         the lock screen shows the device ID. **This is the default.**
+     *
+     * Why the default is false: this is the single setting that turns "I pressed Run in Android Studio to
+     * look at my own build" into an app that closes with no lock screen and no visible ID - which reads
+     * exactly like a crash. It adds no real protection against a distributed attacker: the only APK that
+     * is both `android:debuggable="true"` AND signed with the operator's certificate is the operator's
+     * own build (a third party cannot produce one without the signing key, and re-signing changes the
+     * certificate, which [ENFORCE_CERT_PIN] still catches and terminates). So as a *fatal* it only ever
+     * bites the developer. Set it back to true if you specifically want a debug build under a debugger to
+     * be terminated rather than locked.
+     */
+    const val DEBUGGER_DETECTION_FATAL: Boolean = false
 
     /**
      * Root heuristics (`su` in the usual places, `test-keys` ROMs) are *reported* always and refused only

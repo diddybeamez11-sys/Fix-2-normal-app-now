@@ -11,3 +11,11 @@ __pycache__/
 keystore.properties
 *.jks
 *.keystore
+
+# HWID whitelist signing key - NEVER commit, print in CI, or upload.
+# The private half of the ECDSA P-256 key that signs devices.json (tools/hwid-keygen.mjs).
+# It lives outside this repo by convention (~/hwid-signing-key.pem); these rules are a safety net.
+hwid-signing-key.pem
+*.pem
+*.key
+devices.json.sig

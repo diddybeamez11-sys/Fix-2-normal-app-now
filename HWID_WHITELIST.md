@@ -75,11 +75,11 @@ It writes the **private key** to that file (keep it, do not commit it, back it u
 never update the list again) and prints the **public key** as one base64 line. Paste it into:
 
 * `app/src/main/java/dev/sora/protohax/hwid/LicenseConfig.kt`
-* constant `SIGNING_PUBLIC_KEY_BASE64` (**line 101**), between the quotes.
+* constant `SIGNING_PUBLIC_KEY_BASE64` (**line 109**), between the quotes.
 
 ### 1.3 Point the app at your repository
 
-Same file, **line 69**:
+Same file, **line 70**:
 
 ```kotlin
 const val WHITELIST_URL: String = "https://raw.githubusercontent.com/<OWNER>/<DEVICES-REPO>/main/devices.json"
@@ -153,7 +153,7 @@ background re-check). Three details worth knowing:
   one place where the app deliberately does *not* fall back to the last good list.)
 * **A running relay stops.** If the app had already bound port 1337 and built its tunnel, the process is
   terminated rather than left running with a dead UI
-  (`REVOKE_ENDS_THE_PROCESS_WHEN_RUNNING`, line 204). Reopening it shows the lock screen with the ID.
+  (`REVOKE_ENDS_THE_PROCESS_WHEN_RUNNING`, line 212). Reopening it shows the lock screen with the ID.
 
 ### The signing command, in full
 
@@ -179,7 +179,7 @@ bug.
 
 ### Alternative: an unsigned plain list
 
-If you set `REQUIRE_SIGNATURE = false` (line 114) the app ignores the `.sig` file completely and the list
+If you set `REQUIRE_SIGNATURE = false` (line 122) the app ignores the `.sig` file completely and the list
 may be one ID per line:
 
 ```
@@ -217,14 +217,14 @@ a `version` lower than the last one it accepted.
 
 ### 3.1 Which identifier goes in the list
 
-`LicenseConfig.APPROVAL_ID_MODE` (line 77) decides what the app looks itself up by:
+`LicenseConfig.APPROVAL_ID_MODE` (line 78) decides what the app looks itself up by:
 
 | mode | the ID in your list | where the user reads it | stability |
 |---|---|---|---|
 | `ANDROID_ID` (**default**) | the 16-hex-character `Settings.Secure.ANDROID_ID` | game's own device-id screens, or the app's lock screen / dashboard | survives uninstall+reinstall; **changes on factory reset** |
 | `INSTALL_HWID` | the random UUID the app generates on first start | only this app (lock screen / dashboard) | survives until the app's data is cleared; a reinstall gets a new one |
 
-With `ACCEPT_IDS_EITHER_WAY = true` (line 88, the default) **either** identifier approves the device, which
+With `ACCEPT_IDS_EITHER_WAY = true` (line 89, the default) **either** identifier approves the device, which
 is what makes switching modes painless: users you approved by HWID yesterday keep working after you
 switch to ANDROID_ID, and vice versa. The app shows both IDs on the lock screen, so a user can always send
 you the one you ask for.
@@ -238,14 +238,14 @@ you the one you ask for.
 | ID is in the list, signature good | runs normally |
 | ID is not in the list | **locked**: lock screen with the ID + Copy ID; no grace period |
 | ID was removed from the list after being approved | **locked**, immediately at start, and the removal is remembered - it applies even while offline |
-| list fetched but signature missing/wrong/unparseable | **locked** (a trusted list is the only basis for a decision). `TAMPER_FAILS_CLOSED = false` (line 128) downgrades this to the offline rules |
+| list fetched but signature missing/wrong/unparseable | **locked** (a trusted list is the only basis for a decision). `TAMPER_FAILS_CLOSED = false` (line 136) downgrades this to the offline rules |
 | list fetched, `version` lower than the last accepted | **locked** (replay) |
 | list could not be fetched, last successful check < `GRACE_PERIOD_MS` ago | runs, and the dashboard says it is on the cached check and when that expires |
 | list could not be fetched, grace expired or the device never verified | **locked** |
 | device clock moved back more than 6 hours | **locked** (it is how the grace period would be extended) |
 | repackaged APK (signing certificate does not match the build's pin) | **terminated** on purpose - see below |
 | debuggable APK with a debugger attached | **terminated** on purpose |
-| rooted device (`su`, test-keys ROM) | runs, **warns** - `ROOT_DETECTION_FATAL = true` (line 243) refuses it instead |
+| rooted device (`su`, test-keys ROM) | runs, **warns** - `ROOT_DETECTION_FATAL = true` (line 251) refuses it instead |
 
 ### 4.1 Locked vs terminated
 
@@ -259,10 +259,10 @@ does not have to do anything except keep the app open (or start it again later).
 **Terminated** happens in exactly two cases, both deliberate, both with a log line rather than an
 exception:
 
-* a **repackaged or debugged APK** (`INTEGRITY_FAILURE_IS_FATAL`, line 258) - there is no legitimate
+* a **repackaged or debugged APK** (`INTEGRITY_FAILURE_IS_FATAL`, line 266) - there is no legitimate
   reason for one to exist, and a lock screen in a binary the user compiled themselves is a joke;
 * a refusal that arrives **while the relay is already running** (`REVOKE_ENDS_THE_PROCESS_WHEN_RUNNING`,
-  line 204) - there is a bound socket and a live tunnel at that moment, so the app stops instead of
+  line 212) - there is a bound socket and a live tunnel at that moment, so the app stops instead of
   leaving a working relay behind an idle UI.
 
 The termination order is: a logged error line (`logcat -s ProtoHaxHwid`), the ID copied to the clipboard,
@@ -391,7 +391,7 @@ you add may require a secret in the APK.
 * **Debuggable APK with a debugger attached** - refused. (A debuggable build without a debugger is only
   reported: that is a developer build, not an attack.)
 * **Root heuristics** - `su` in the usual paths or on `PATH`, `test-keys` in `Build.TAGS`. **Reported, not
-  fatal by default** (`ROOT_DETECTION_FATAL = false`, line 243), and that is a deliberate change from the
+  fatal by default** (`ROOT_DETECTION_FATAL = false`, line 251), and that is a deliberate change from the
   first version of this feature:
   * it is not what protects the list - the list is signed, and a rooted user can patch any check in this
     app including this one, so a refusal is mostly theatre;
@@ -446,14 +446,14 @@ any of these values. Line numbers are from the current file and may drift - sear
 
 | constant | default | what it does |
 |---|---|---|
-| `WHITELIST_URL` | placeholder | **the one line to edit** (line 69) |
+| `WHITELIST_URL` | placeholder | **the one line to edit** (line 70) |
 | `SIGNATURE_URL_SUFFIX` | `.sig` | signature file = URL + this |
-| `APPROVAL_ID_MODE` | `ANDROID_ID` | which identifier the list holds (line 77); see 3.1 |
-| `ACCEPT_IDS_EITHER_WAY` | `true` | approve a device by either identifier (line 88) |
-| `SIGNING_PUBLIC_KEY_BASE64` | empty | your public key (line 101); empty = lock everything |
+| `APPROVAL_ID_MODE` | `ANDROID_ID` | which identifier the list holds (line 78); see 3.1 |
+| `ACCEPT_IDS_EITHER_WAY` | `true` | approve a device by either identifier (line 89) |
+| `SIGNING_PUBLIC_KEY_BASE64` | empty | your public key (line 109); empty = lock everything |
 | `REQUIRE_SIGNATURE` | `true` | require the signature (`false` = unsigned plain list, see 2.4) |
 | `TAMPER_FAILS_CLOSED` | `true` | a fetched-but-unverifiable list locks (it is not "offline") |
-| `GRACE_PERIOD_MS` | 7 days | offline grace period; **`0` = strict online-only** (line 146) |
+| `GRACE_PERIOD_MS` | 7 days | offline grace period; **`0` = strict online-only** (line 154) |
 | `CONNECT_TIMEOUT_MS` / `READ_TIMEOUT_MS` / `CALL_TIMEOUT_MS` | 5 s / 8 s / 12 s | per-request limits |
 | `MAX_DOWNLOAD_BYTES` | 1 MiB | refuse larger bodies |
 | `VERDICT_WAIT_TIMEOUT_MS` | 35 s | how long the relay gate waits for a verdict |
@@ -461,12 +461,12 @@ any of these values. Line numbers are from the current file and may drift - sear
 | `LOCK_RETRY_INTERVAL_MS` | 60 s | how often the lock screen asks again |
 | `LOCK_POLL_INTERVAL_MS` | 1 s | how often the lock screen re-reads the local verdict |
 | `LOCK_RELAUNCH_DEBOUNCE_MS` | 10 s | anti-flicker guard for the lock screen |
-| `REVOKE_ENDS_THE_PROCESS_WHEN_RUNNING` | `true` | a refusal while the relay is up terminates the app (line 204) |
+| `REVOKE_ENDS_THE_PROCESS_WHEN_RUNNING` | `true` | a refusal while the relay is up terminates the app (line 212) |
 | `ENFORCE_CERT_PIN` | `true` | the APK signing certificate pin |
 | `DEBUGGER_DETECTION_FATAL` | `true` | debuggable APK + attached debugger is fatal |
-| `ROOT_DETECTION_FATAL` | **`false`** | rooted device is refused; the default only reports it (line 243) |
+| `ROOT_DETECTION_FATAL` | **`false`** | rooted device is refused; the default only reports it (line 251) |
 | `CLOCK_ROLLBACK_TOLERANCE_MS` | 6 h | how far the clock may jump back before it counts as tampering |
-| `INTEGRITY_FAILURE_IS_FATAL` | `true` | a repackaged APK is terminated, not locked (line 258) |
+| `INTEGRITY_FAILURE_IS_FATAL` | `true` | a repackaged APK is terminated, not locked (line 266) |
 | `ABORT_KILL_DELAY_MS` | 2.5 s | between the refusal toast and the process kill |
 | `PREFS_FILE_NAME` / `HWID_FILE_NAME` / `LOG_TAG` | - | storage and logcat names |
 
@@ -514,7 +514,7 @@ Three options, in order of preference:
 
 | symptom | look at |
 |---|---|
-| every device is locked | is the public key pasted in (line 101)? is `devices.json.sig` committed and up to date with `devices.json`? did you bump `version`? |
+| every device is locked | is the public key pasted in (line 109)? is `devices.json.sig` committed and up to date with `devices.json`? did you bump `version`? |
 | the lock screen appears but the user is definitely on the list | are you comparing the same identifier? The list must contain the value shown on the lock screen (ANDROID_ID vs install HWID - section 3.1) |
 | "the list did not pass its signature check" | the ID and the reason are in `logcat -s ProtoHaxHwid`; Crashlytics gets a non-fatal with the same reason. Re-sign and commit both files |
 | "not on the list" | the ID in the log is not in `devices.json` (or the wrong identifier kind, see above; matching is case-insensitive, so a typo is the usual cause) |
