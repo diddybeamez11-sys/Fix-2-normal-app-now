@@ -8,12 +8,20 @@ import dev.sora.protohax.relay.XboxAuthWarmUp
 import dev.sora.protohax.relay.netty.log.NettyLoggerFactory
 import dev.sora.protohax.relay.service.AppService
 import dev.sora.protohax.ui.overlay.OverlayManager
+import dev.sora.protohax.util.CrashHandler
 import io.netty.util.internal.logging.InternalLoggerFactory
+import dev.sora.relay.utils.logError
 
 class MyApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+		// First, before anything in this app can fail: from here on every unhandled exception is
+		// written to a file (filesDir/crashes) instead of only being printed to logcat, which is
+		// the only way to tell "the app closed itself" apart from "this device was refused" on a
+		// phone nobody can attach a debugger to. See dev.sora.protohax.util.CrashHandler.
+		CrashHandler.install(this)
 
 		InternalLoggerFactory.setDefaultFactory(NettyLoggerFactory())
 
@@ -43,7 +51,15 @@ class MyApplication : Application() {
 			// Deliberately after AuthHttpClient.install(): the check uses the app's HTTP client.
 			HwidGate.startAsync(this, "app start")
 
-		XboxAuthWarmUp.warmUp("app started", notifyUser = false)
+		// A warm-up: it makes the *first* login packet of the day fast, and nothing else in the app
+		// depends on it. It is the first thing that touches the stored accounts, so a failure here
+		// (an account file this install cannot read, for example) must cost the user a slower login
+		// inside the game, not the whole app on start-up.
+		try {
+			XboxAuthWarmUp.warmUp("app started", notifyUser = false)
+		} catch (t: Throwable) {
+			logError("xbox login warm-up at app start", t)
+		}
     }
 
     companion object {

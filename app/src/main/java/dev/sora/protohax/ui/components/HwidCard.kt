@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -112,15 +111,22 @@ fun CardHwid() {
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            SelectionContainer {
-                Text(
-                    text = approvalId.ifBlank { stringResource(R.string.lock_id_unavailable) },
-                    fontSize = 14.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+            // Deliberately NOT wrapped in SelectionContainer: with Compose 1.4.3 a selectable
+            // one-line Text crashes while it is being drawn -
+            //     java.lang.IllegalArgumentException: lineIndex(-1) is out of bounds [0, 1)
+            //     androidx.compose.foundation.text.selection.MultiWidgetSelectionDelegate
+            // - which killed the app on the very first frame of the dashboard, on every start,
+            // before the user could touch anything. The delegate only exists for a Text inside a
+            // SelectionContainer, so leaving it out removes the crash; the "Copy" button right
+            // below already puts this ID on the clipboard, which is the only thing the selection
+            // was for.
+            Text(
+                text = approvalId.ifBlank { stringResource(R.string.lock_id_unavailable) },
+                fontSize = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onBackground,
+                fontWeight = FontWeight.Bold
+            )
 
             Spacer(modifier = Modifier.size(0.dp, 4.dp))
             Row {
@@ -149,14 +155,13 @@ fun CardHwid() {
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                SelectionContainer {
-                    Text(
-                        text = secondaryId,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                // Not selectable, for the same reason as the primary ID above.
+                Text(
+                    text = secondaryId,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 TextButton(onClick = {
                     if (HwidReport.copyToClipboard(ctx, secondaryId)) {
                         ctx.toast(R.string.hwid_copied)

@@ -54,6 +54,7 @@ import dev.sora.protohax.relay.service.AppService
 import dev.sora.protohax.ui.activities.AppPickerActivity
 import dev.sora.protohax.ui.activities.MainActivity
 import dev.sora.protohax.ui.components.AppIcon
+import dev.sora.protohax.ui.components.CardCrash
 import dev.sora.protohax.ui.components.CardCurrentApplication
 import dev.sora.protohax.ui.components.CardHwid
 import dev.sora.protohax.ui.components.CardLoginAlert
@@ -111,6 +112,8 @@ fun DashboardScreen(
 		}
     ) {
         Column(modifier = Modifier.padding(it)) {
+            // A crash report from the previous run, waiting to be sent (see util/CrashHandler).
+            CardCrash()
             CardLoginAlert(navigateToTopLevelDestination)
             CardCurrentApplication(applicationSelected, pickAppActivityLauncher)
             // HWID whitelist: what this device is, what the gate thinks of it, and the button that

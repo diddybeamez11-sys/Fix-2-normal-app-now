@@ -118,6 +118,14 @@
     <string name="tab_settings">Settings</string>
     <string name="tab_btn_navigation_drawer">Navigation Drawer</string>
 
+    <string name="crash_card_title">The app closed itself the last time it ran</string>
+    <string name="crash_card_body">The stack trace was saved. Sending it is the fastest way to get the crash fixed; it can also be read on the Logs screen.</string>
+    <string name="crash_copy">Copy report</string>
+    <string name="crash_share">Share report</string>
+    <string name="crash_dismiss">Dismiss</string>
+    <string name="crash_copied">Report copied. Paste it into the bug report.</string>
+    <string name="crash_log_header">Last crash</string>
+
     <string name="dialog_title">Proceed?</string>
     <string name="dialog_confirm">Confirm</string>
     <string name="dialog_cancel">Cancel</string>
